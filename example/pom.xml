@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.q6cyber</groupId>
+  <artifactId>q6-tdlib</artifactId>
+  <version>1.0.3</version>
+  <packaging>jar</packaging>
+
+  <properties>
+    <maven.compiler.source>11</maven.compiler.source>
+    <maven.compiler.target>11</maven.compiler.target>
+  </properties>
+
+  <build>
+    <sourceDirectory>java</sourceDirectory>
+    <resources>
+      <resource>
+        <directory>${basedir}/target/includes</directory>
+        <includes>
+          <include>**/*.so</include>
+        </includes>
+        <filtering>false</filtering>
+      </resource>
+    </resources>
+    <plugins>
+      <plugin>
+        <artifactId>maven-resources-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>copy-resources</id>
+            <phase>validate</phase>
+            <goals>
+              <goal>copy-resources</goal>
+            </goals>
+            <configuration>
+              <outputDirectory>target/includes/libs</outputDirectory>
+              <resources>
+                <resource>
+                  <directory>${basedir}/java/build</directory>
+                  <includes>
+                    <include>**/*.so</include>
+                  </includes>
+                  <filtering>false</filtering>
+                </resource>
+              </resources>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <configuration>
+          <archive>
+            <manifest>
+              <addClasspath>true</addClasspath>
+              <classpathPrefix>lib/</classpathPrefix>
+            </manifest>
+          </archive>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+
+  <scm>
+    <connection>scm:git:https://github.com/Q6Cyber/td.git</connection>
+    <developerConnection>scm:git:https://github.com/Q6Cyber/td.git</developerConnection>
+  </scm>
+
+  <distributionManagement>
+    <snapshotRepository>
+      <id>snapshots</id>
+      <name>q6-cyber-maven-artifactory-server-tools-001-snapshots</name>
+      <url>http://maven-artifactory.gcp.internal.q6cyber.com/artifactory/libs-snapshot</url>
+    </snapshotRepository>
+    <repository>
+      <id>central</id>
+      <name>q6-cyber-maven-artifactory-server-tools-001-releases</name>
+      <url>http://maven-artifactory.gcp.internal.q6cyber.com/artifactory/libs-release</url>
+    </repository>
+  </distributionManagement>
+
+</project>
