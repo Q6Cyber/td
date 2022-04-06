@@ -6,7 +6,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.q6cyber</groupId>
   <artifactId>q6-tdlib</artifactId>
-  <version>1.0.3</version>
+  <version>1.0.4</version>
   <packaging>jar</packaging>
 
   <properties>
@@ -72,14 +72,12 @@
 
   <distributionManagement>
     <snapshotRepository>
-      <id>snapshots</id>
-      <name>q6-cyber-maven-artifactory-server-tools-001-snapshots</name>
-      <url>http://maven-artifactory.gcp.internal.q6cyber.com/artifactory/libs-snapshot</url>
+      <id>artifact-registry</id>
+      <url>artifactregistry://us-east1-maven.pkg.dev/stable-glass-183220/java-snapshot</url>
     </snapshotRepository>
     <repository>
-      <id>central</id>
-      <name>q6-cyber-maven-artifactory-server-tools-001-releases</name>
-      <url>http://maven-artifactory.gcp.internal.q6cyber.com/artifactory/libs-release</url>
+      <id>artifact-registry</id>
+      <url>artifactregistry://us-east1-maven.pkg.dev/stable-glass-183220/java-release</url>
     </repository>
   </distributionManagement>
 
