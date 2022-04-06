@@ -1,4 +1,46 @@
-# TDLib
+# Q6TDLib
+
+## Q6 specific Instructions
+
+1. Go to the Q6 fork of tdlib: https://github.com/Q6Cyber/td/tree/master
+2. Click the 'Refresh upstream' button
+3. In your local repo, pull from master.
+4. Ensure our modification is still there:
+```c++
+  if (options_.api_id == 21724) {
+    options_.application_version += ", TDLib ";
+    options_.application_version += TDLIB_VERSION;
+  }
+```
+5. Run the C build from terminal. Execute commands from https://tdlib.github.io/td/build.html (takes up to an hour)
+```bash
+    sudo apt-get update
+    sudo apt-get upgrade
+    sudo apt-get install make git zlib1g-dev libssl-dev gperf php-cli cmake default-jdk g++
+    git clone https://github.com/tdlib/td.git
+    cd td
+    rm -rf build
+    mkdir build
+    cd build
+    cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX:PATH=../example/java/td -DTD_ENABLE_JNI=ON ..
+    cmake --build . --target install
+    cd ..
+    cd example/java
+    rm -rf build
+    mkdir build
+    cd build
+    cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX:PATH=../../../tdlib -DTd_DIR:PATH=$(readlink -e ../td/lib/cmake/Td) ..
+    cmake --build . --target install
+    cd ../../..
+    cd ..
+    ls -l td/tdlib
+```
+7. Run `mvn clean install`
+8. Run `mvn deploy`
+9. Update dependency in mercator
+
+---
+## Original readme
 
 TDLib (Telegram Database library) is a cross-platform library for building [Telegram](https://telegram.org) clients. It can be easily used from almost any programming language.
 
