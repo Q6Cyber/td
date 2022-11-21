@@ -13,8 +13,7 @@
 #include "td/db/DbKey.h"
 #include "td/db/KeyValueSyncInterface.h"
 
-#include "td/actor/PromiseFuture.h"
-
+#include "td/utils/Promise.h"
 #include "td/utils/Slice.h"
 #include "td/utils/Status.h"
 
@@ -31,9 +30,12 @@ class DialogDbSyncInterface;
 class DialogDbSyncSafeInterface;
 class DialogDbAsyncInterface;
 class FileDbInterface;
-class MessagesDbSyncInterface;
-class MessagesDbSyncSafeInterface;
-class MessagesDbAsyncInterface;
+class MessageDbSyncInterface;
+class MessageDbSyncSafeInterface;
+class MessageDbAsyncInterface;
+class MessageThreadDbSyncInterface;
+class MessageThreadDbSyncSafeInterface;
+class MessageThreadDbAsyncInterface;
 class SqliteConnectionSafe;
 class SqliteKeyValueSafe;
 class SqliteKeyValueAsyncInterface;
@@ -48,23 +50,25 @@ class TdDb {
   TdDb &operator=(TdDb &&) = delete;
   ~TdDb();
 
-  struct Events {
+  struct OpenedDatabase {
+    string database_directory;
+    string files_directory;
+
+    unique_ptr<TdDb> database;
+
     vector<BinlogEvent> to_secret_chats_manager;
     vector<BinlogEvent> user_events;
     vector<BinlogEvent> chat_events;
     vector<BinlogEvent> channel_events;
     vector<BinlogEvent> secret_chat_events;
     vector<BinlogEvent> web_page_events;
+    vector<BinlogEvent> save_app_log_events;
     vector<BinlogEvent> to_poll_manager;
     vector<BinlogEvent> to_messages_manager;
     vector<BinlogEvent> to_notification_manager;
+    vector<BinlogEvent> to_notification_settings_manager;
   };
-  static Result<unique_ptr<TdDb>> open(int32 scheduler_id, const TdParameters &parameters, DbKey key, Events &events);
-
-  struct EncryptionInfo {
-    bool is_encrypted{false};
-  };
-  static Result<EncryptionInfo> check_encryption(const TdParameters &parameters);
+  static void open(int32 scheduler_id, TdParameters parameters, DbKey key, Promise<OpenedDatabase> &&promise);
 
   static Status destroy(const TdParameters &parameters);
 
@@ -75,7 +79,9 @@ class TdDb {
 
   std::shared_ptr<KeyValueSyncInterface> get_binlog_pmc_shared();
   std::shared_ptr<KeyValueSyncInterface> get_config_pmc_shared();
-  KeyValueSyncInterface *get_binlog_pmc();
+
+#define get_binlog_pmc() get_binlog_pmc_impl(__FILE__, __LINE__)
+  KeyValueSyncInterface *get_binlog_pmc_impl(const char *file, int line);
   KeyValueSyncInterface *get_config_pmc();
 
   SqliteKeyValue *get_sqlite_sync_pmc();
@@ -89,8 +95,11 @@ class TdDb {
   void close_all(Promise<> on_finished);
   void close_and_destroy_all(Promise<> on_finished);
 
-  MessagesDbSyncInterface *get_messages_db_sync();
-  MessagesDbAsyncInterface *get_messages_db_async();
+  MessageDbSyncInterface *get_message_db_sync();
+  MessageDbAsyncInterface *get_message_db_async();
+
+  MessageThreadDbSyncInterface *get_message_thread_db_sync();
+  MessageThreadDbAsyncInterface *get_message_thread_db_async();
 
   DialogDbSyncInterface *get_dialog_db_sync();
   DialogDbAsyncInterface *get_dialog_db_async();
@@ -110,8 +119,11 @@ class TdDb {
   std::shared_ptr<SqliteKeyValueSafe> common_kv_safe_;
   unique_ptr<SqliteKeyValueAsyncInterface> common_kv_async_;
 
-  std::shared_ptr<MessagesDbSyncSafeInterface> messages_db_sync_safe_;
-  std::shared_ptr<MessagesDbAsyncInterface> messages_db_async_;
+  std::shared_ptr<MessageDbSyncSafeInterface> message_db_sync_safe_;
+  std::shared_ptr<MessageDbAsyncInterface> message_db_async_;
+
+  std::shared_ptr<MessageThreadDbSyncSafeInterface> message_thread_db_sync_safe_;
+  std::shared_ptr<MessageThreadDbAsyncInterface> message_thread_db_async_;
 
   std::shared_ptr<DialogDbSyncSafeInterface> dialog_db_sync_safe_;
   std::shared_ptr<DialogDbAsyncInterface> dialog_db_async_;
@@ -120,8 +132,11 @@ class TdDb {
   std::shared_ptr<BinlogKeyValue<ConcurrentBinlog>> config_pmc_;
   std::shared_ptr<ConcurrentBinlog> binlog_;
 
-  Status init(int32 scheduler_id, const TdParameters &parameters, DbKey key, Events &events);
-  Status init_sqlite(int32 scheduler_id, const TdParameters &parameters, const DbKey &key, const DbKey &old_key,
+  static void open_impl(TdParameters parameters, DbKey key, Promise<OpenedDatabase> &&promise);
+
+  static Status check_parameters(TdParameters &parameters);
+
+  Status init_sqlite(const TdParameters &parameters, const DbKey &key, const DbKey &old_key,
                      BinlogKeyValue<Binlog> &binlog_pmc);
 
   void do_close(Promise<> on_finished, bool destroy_flag);

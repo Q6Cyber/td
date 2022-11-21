@@ -6,9 +6,8 @@
 //
 #pragma once
 
-#include "td/actor/PromiseFuture.h"
-
 #include "td/utils/common.h"
+#include "td/utils/Promise.h"
 #include "td/utils/Slice.h"
 #include "td/utils/Span.h"
 #include "td/utils/Status.h"
@@ -105,6 +104,8 @@ class TQueue {
 
   virtual void forget(QueueId queue_id, EventId event_id) = 0;
 
+  virtual void clear(QueueId queue_id, size_t keep_count) = 0;
+
   virtual EventId get_head(QueueId queue_id) const = 0;
   virtual EventId get_tail(QueueId queue_id) const = 0;
 
@@ -113,7 +114,8 @@ class TQueue {
 
   virtual size_t get_size(QueueId queue_id) const = 0;
 
-  virtual int64 run_gc(int32 unix_time_now) = 0;
+  // returns number of deleted events and whether garbage collection was completed
+  virtual std::pair<int64, bool> run_gc(int32 unix_time_now) = 0;
   virtual void close(Promise<> promise) = 0;
 };
 

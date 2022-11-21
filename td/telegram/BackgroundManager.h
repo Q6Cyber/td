@@ -11,16 +11,15 @@
 #include "td/telegram/files/FileId.h"
 #include "td/telegram/files/FileSourceId.h"
 #include "td/telegram/logevent/LogEvent.h"
-#include "td/telegram/Photo.h"
 #include "td/telegram/td_api.h"
 #include "td/telegram/telegram_api.h"
 
 #include "td/actor/actor.h"
-#include "td/actor/PromiseFuture.h"
 
 #include "td/utils/common.h"
 #include "td/utils/FlatHashMap.h"
 #include "td/utils/FlatHashSet.h"
+#include "td/utils/Promise.h"
 #include "td/utils/Status.h"
 
 #include <memory>
@@ -35,9 +34,6 @@ class BackgroundManager final : public Actor {
   BackgroundManager(Td *td, ActorShared<> parent);
 
   void get_backgrounds(bool for_dark_theme, Promise<td_api::object_ptr<td_api::backgrounds>> &&promise);
-
-  static Result<string> get_background_url(const string &name,
-                                           td_api::object_ptr<td_api::BackgroundType> background_type);
 
   void reload_background(BackgroundId background_id, int64 access_hash, Promise<Unit> &&promise);
 

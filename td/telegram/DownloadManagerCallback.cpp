@@ -11,9 +11,9 @@
 #include "td/telegram/Td.h"
 
 #include "td/actor/actor.h"
-#include "td/actor/PromiseFuture.h"
 
 #include "td/utils/common.h"
+#include "td/utils/Promise.h"
 #include "td/utils/Status.h"
 
 namespace td {
@@ -47,12 +47,14 @@ void DownloadManagerCallback::update_file_removed(FileId file_id, DownloadManage
 void DownloadManagerCallback::start_file(FileId file_id, int8 priority, ActorShared<DownloadManager> download_manager) {
   send_closure_later(td_->file_manager_actor_, &FileManager::download, file_id,
                      make_download_file_callback(td_, std::move(download_manager)), priority,
-                     FileManager::KEEP_DOWNLOAD_OFFSET, FileManager::IGNORE_DOWNLOAD_LIMIT);
+                     FileManager::KEEP_DOWNLOAD_OFFSET, FileManager::IGNORE_DOWNLOAD_LIMIT,
+                     Promise<td_api::object_ptr<td_api::file>>());
 }
 
 void DownloadManagerCallback::pause_file(FileId file_id) {
   send_closure_later(td_->file_manager_actor_, &FileManager::download, file_id, nullptr, 0,
-                     FileManager::KEEP_DOWNLOAD_OFFSET, FileManager::KEEP_DOWNLOAD_LIMIT);
+                     FileManager::KEEP_DOWNLOAD_OFFSET, FileManager::KEEP_DOWNLOAD_LIMIT,
+                     Promise<td_api::object_ptr<td_api::file>>());
 }
 
 void DownloadManagerCallback::delete_file(FileId file_id) {
@@ -64,17 +66,28 @@ FileId DownloadManagerCallback::dup_file_id(FileId file_id) {
   return td_->file_manager_->dup_file_id(file_id);
 }
 
+void DownloadManagerCallback::get_file_search_text(FileId file_id, FileSourceId file_source_id,
+                                                   Promise<string> &&promise) {
+  send_closure(td_->file_reference_manager_actor_, &FileReferenceManager::get_file_search_text, file_source_id,
+               get_file_view(file_id).get_unique_file_id(), std::move(promise));
+}
+
 FileView DownloadManagerCallback::get_file_view(FileId file_id) {
   return td_->file_manager_->get_file_view(file_id);
 }
 
 FileView DownloadManagerCallback::get_sync_file_view(FileId file_id) {
-  return td_->file_manager_->get_sync_file_view(file_id);
+  td_->file_manager_->check_local_location(file_id, true);
+  return get_file_view(file_id);
+}
+
+td_api::object_ptr<td_api::file> DownloadManagerCallback::get_file_object(FileId file_id) {
+  return td_->file_manager_->get_file_object(file_id);
 }
 
 td_api::object_ptr<td_api::fileDownload> DownloadManagerCallback::get_file_download_object(
     FileId file_id, FileSourceId file_source_id, int32 add_date, int32 complete_date, bool is_paused) {
-  return td_api::make_object<td_api::fileDownload>(td_->file_manager_->get_file_view(file_id).file_id().get(),
+  return td_api::make_object<td_api::fileDownload>(td_->file_manager_->get_file_view(file_id).get_main_file_id().get(),
                                                    td_->file_reference_manager_->get_message_object(file_source_id),
                                                    add_date, complete_date, is_paused);
 }

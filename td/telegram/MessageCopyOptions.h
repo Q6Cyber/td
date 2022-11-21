@@ -19,12 +19,21 @@ struct MessageCopyOptions {
   bool send_copy = false;
   bool replace_caption = false;
   FormattedText new_caption;
-  MessageId top_thread_message_id;
   MessageId reply_to_message_id;
   unique_ptr<ReplyMarkup> reply_markup;
 
   MessageCopyOptions() = default;
   MessageCopyOptions(bool send_copy, bool remove_caption) : send_copy(send_copy), replace_caption(remove_caption) {
+  }
+
+  bool is_supported_server_side() const {
+    if (!send_copy) {
+      return true;
+    }
+    if ((replace_caption && !new_caption.text.empty()) || reply_to_message_id.is_valid() || reply_markup != nullptr) {
+      return false;
+    }
+    return true;
   }
 };
 
@@ -33,9 +42,6 @@ inline StringBuilder &operator<<(StringBuilder &string_builder, MessageCopyOptio
     string_builder << "CopyOptions[replace_caption = " << copy_options.replace_caption;
     if (copy_options.replace_caption) {
       string_builder << ", new_caption = " << copy_options.new_caption;
-    }
-    if (copy_options.top_thread_message_id.is_valid()) {
-      string_builder << ", in thread of " << copy_options.top_thread_message_id;
     }
     if (copy_options.reply_to_message_id.is_valid()) {
       string_builder << ", in reply to " << copy_options.reply_to_message_id;

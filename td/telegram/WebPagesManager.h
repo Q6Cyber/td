@@ -16,13 +16,15 @@
 #include "td/telegram/WebPageId.h"
 
 #include "td/actor/actor.h"
-#include "td/actor/PromiseFuture.h"
-#include "td/actor/Timeout.h"
+#include "td/actor/MultiTimeout.h"
 
 #include "td/utils/common.h"
 #include "td/utils/FlatHashMap.h"
 #include "td/utils/FlatHashSet.h"
+#include "td/utils/Promise.h"
+#include "td/utils/Slice.h"
 #include "td/utils/Status.h"
+#include "td/utils/WaitFreeHashMap.h"
 
 #include <utility>
 
@@ -125,7 +127,7 @@ class WebPagesManager final : public Actor {
   void get_web_page_instant_view_impl(WebPageId web_page_id, bool force_full, Promise<WebPageId> &&promise);
 
   tl_object_ptr<td_api::webPageInstantView> get_web_page_instant_view_object(
-      WebPageId web_page_id, const WebPageInstantView *web_page_instant_view) const;
+      WebPageId web_page_id, const WebPageInstantView *web_page_instant_view, Slice web_page_url) const;
 
   static void on_pending_web_page_timeout_callback(void *web_pages_manager_ptr, int64 web_page_id_int);
 
@@ -179,7 +181,7 @@ class WebPagesManager final : public Actor {
 
   Td *td_;
   ActorShared<> parent_;
-  FlatHashMap<WebPageId, unique_ptr<WebPage>, WebPageIdHash> web_pages_;
+  WaitFreeHashMap<WebPageId, unique_ptr<WebPage>, WebPageIdHash> web_pages_;
 
   FlatHashMap<WebPageId, vector<Promise<Unit>>, WebPageIdHash> load_web_page_from_database_queries_;
   FlatHashSet<WebPageId, WebPageIdHash> loaded_from_database_web_pages_;

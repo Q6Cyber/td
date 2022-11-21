@@ -7,11 +7,13 @@
 #include "td/telegram/EncryptedFile.h"
 #include "td/telegram/FolderId.h"
 #include "td/telegram/Global.h"
+#include "td/telegram/logevent/LogEvent.h"
 #include "td/telegram/MessageId.h"
 #include "td/telegram/secret_api.h"
 #include "td/telegram/SecretChatActor.h"
 #include "td/telegram/SecretChatId.h"
 #include "td/telegram/telegram_api.h"
+#include "td/telegram/UserId.h"
 
 #include "td/db/binlog/BinlogInterface.h"
 #include "td/db/binlog/detail/BinlogEventsProcessor.h"
@@ -26,7 +28,6 @@
 
 #include "td/actor/actor.h"
 #include "td/actor/ConcurrentScheduler.h"
-#include "td/actor/PromiseFuture.h"
 
 #include "td/utils/algorithm.h"
 #include "td/utils/as.h"
@@ -38,6 +39,7 @@
 #include "td/utils/Gzip.h"
 #include "td/utils/logging.h"
 #include "td/utils/misc.h"
+#include "td/utils/Promise.h"
 #include "td/utils/Random.h"
 #include "td/utils/Slice.h"
 #include "td/utils/SliceBuilder.h"
@@ -433,7 +435,7 @@ class FakeBinlog final
     has_request_sync = false;
     auto pos = static_cast<size_t>(Random::fast_uint64() % pending_events_.size());
     // pos = pending_events_.size() - 1;
-    std::vector<Promise<>> promises;
+    td::vector<Promise<Unit>> promises;
     for (size_t i = 0; i <= pos; i++) {
       auto &pending = pending_events_[i];
       auto event = std::move(pending.event);
@@ -444,9 +446,7 @@ class FakeBinlog final
       append(promises, std::move(pending.promises_));
     }
     pending_events_.erase(pending_events_.begin(), pending_events_.begin() + pos + 1);
-    for (auto &promise : promises) {
-      promise.set_value(Unit());
-    }
+    set_promises(promises);
 
     for (auto &event : pending_events_) {
       if (event.sync_flag) {
@@ -470,7 +470,7 @@ class FakeBinlog final
   struct PendingEvent {
     BinlogEvent event;
     bool sync_flag = false;
-    std::vector<Promise<>> promises_;
+    td::vector<Promise<Unit>> promises_;
   };
 
   std::vector<PendingEvent> pending_events_;
@@ -762,7 +762,7 @@ class Master final : public Actor {
     auto old_context = set_context(std::make_shared<Global>());
     alice_ = create_actor<SecretChatProxy>("SecretChatProxy alice", "alice", actor_shared(this, 1));
     bob_ = create_actor<SecretChatProxy>("SecretChatProxy bob", "bob", actor_shared(this, 2));
-    send_closure(alice_->get_actor_unsafe()->actor_, &SecretChatActor::create_chat, UserId(static_cast<int64>(2)), 0,
+    send_closure(alice_.get_actor_unsafe()->actor_, &SecretChatActor::create_chat, UserId(static_cast<int64>(2)), 0,
                  123, PromiseCreator::lambda([actor_id = actor_id(this)](Result<SecretChatId> res) {
                    send_closure(actor_id, &Master::got_secret_chat_id, std::move(res), false);
                  }));
@@ -840,9 +840,9 @@ class Master final : public Actor {
   void process_net_query(my_api::messages_requestEncryption &&request_encryption, NetQueryPtr net_query,
                          ActorShared<NetQueryCallback> callback) {
     CHECK(get_link_token() == 1);
-    send_closure(alice_->get_actor_unsafe()->actor_, &SecretChatActor::update_chat,
+    send_closure(alice_.get_actor_unsafe()->actor_, &SecretChatActor::update_chat,
                  make_tl_object<telegram_api::encryptedChatWaiting>(123, 321, 0, 1, 2));
-    send_closure(bob_->get_actor_unsafe()->actor_, &SecretChatActor::update_chat,
+    send_closure(bob_.get_actor_unsafe()->actor_, &SecretChatActor::update_chat,
                  make_tl_object<telegram_api::encryptedChatRequested>(0, false, 123, 321, 0, 1, 2,
                                                                       request_encryption.g_a_.clone()));
     net_query->clear();
@@ -850,7 +850,7 @@ class Master final : public Actor {
   void process_net_query(my_api::messages_acceptEncryption &&request_encryption, NetQueryPtr net_query,
                          ActorShared<NetQueryCallback> callback) {
     CHECK(get_link_token() == 2);
-    send_closure(alice_->get_actor_unsafe()->actor_, &SecretChatActor::update_chat,
+    send_closure(alice_.get_actor_unsafe()->actor_, &SecretChatActor::update_chat,
                  make_tl_object<telegram_api::encryptedChat>(123, 321, 0, 1, 2, request_encryption.g_b_.clone(),
                                                              request_encryption.key_fingerprint_));
 
@@ -1001,9 +1001,7 @@ void FakeSecretChatContext::on_read_message(int64, Promise<> promise) {
 
 TEST(Secret, go) {
   return;
-  ConcurrentScheduler sched;
-  int threads_n = 0;
-  sched.init(threads_n);
+  ConcurrentScheduler sched(0, 0);
 
   Status result;
   sched.create_actor_unsafe<Master>(0, "HandshakeTestActor", &result).release();

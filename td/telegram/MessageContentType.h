@@ -61,7 +61,12 @@ enum class MessageContentType : int32 {
   ProximityAlertTriggered,
   GroupCall,
   InviteToGroupCall,
-  ChatSetTheme
+  ChatSetTheme,
+  WebViewDataSent,
+  WebViewDataReceived,
+  GiftPremium,
+  TopicCreate,
+  TopicEdit
 };
 
 StringBuilder &operator<<(StringBuilder &string_builder, MessageContentType content_type);

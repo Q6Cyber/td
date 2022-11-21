@@ -87,6 +87,7 @@ set(TDUTILS_SOURCE
 
   ${TDMIME_AUTO}
 
+  td/utils/AsyncFileLog.cpp
   td/utils/base64.cpp
   td/utils/BigNum.cpp
   td/utils/buffer.cpp
@@ -99,6 +100,7 @@ set(TDUTILS_SOURCE
   td/utils/filesystem.cpp
   td/utils/find_boundary.cpp
   td/utils/FlatHashTable.cpp
+  td/utils/FloodControlGlobal.cpp
   td/utils/Gzip.cpp
   td/utils/GzipByteFlow.cpp
   td/utils/Hints.cpp
@@ -137,6 +139,7 @@ set(TDUTILS_SOURCE
   td/utils/port/IPAddress.h
   td/utils/port/IoSlice.h
   td/utils/port/MemoryMapping.h
+  td/utils/port/Mutex.h
   td/utils/port/path.h
   td/utils/port/platform.h
   td/utils/port/Poll.h
@@ -177,6 +180,7 @@ set(TDUTILS_SOURCE
   td/utils/AesCtrByteFlow.h
   td/utils/algorithm.h
   td/utils/as.h
+  td/utils/AsyncFileLog.h
   td/utils/AtomicRead.h
   td/utils/base64.h
   td/utils/benchmark.h
@@ -213,6 +217,7 @@ set(TDUTILS_SOURCE
   td/utils/FlatHashSet.h
   td/utils/FlatHashTable.h
   td/utils/FloodControlFast.h
+  td/utils/FloodControlGlobal.h
   td/utils/FloodControlStrict.h
   td/utils/format.h
   td/utils/Gzip.h
@@ -248,6 +253,7 @@ set(TDUTILS_SOURCE
   td/utils/overloaded.h
   td/utils/Parser.h
   td/utils/PathView.h
+  td/utils/Promise.h
   td/utils/queue.h
   td/utils/Random.h
   td/utils/ScopeGuard.h
@@ -289,6 +295,9 @@ set(TDUTILS_SOURCE
   td/utils/utf8.h
   td/utils/Variant.h
   td/utils/VectorQueue.h
+  td/utils/WaitFreeHashMap.h
+  td/utils/WaitFreeHashSet.h
+  td/utils/WaitFreeVector.h
 )
 
 if (TDUTILS_MIME_TYPE)
@@ -305,6 +314,7 @@ set(TDUTILS_TEST_SOURCE
   ${CMAKE_CURRENT_SOURCE_DIR}/test/ChainScheduler.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/test/ConcurrentHashMap.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/test/crypto.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/test/emoji.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/test/Enumerator.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/test/EpochBasedMemoryReclamation.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/test/filesystem.cpp
@@ -328,10 +338,12 @@ set(TDUTILS_TEST_SOURCE
   ${CMAKE_CURRENT_SOURCE_DIR}/test/SharedSlice.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/test/StealingQueue.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/test/variant.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/test/WaitFreeHashMap.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/test/WaitFreeHashSet.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/test/WaitFreeVector.cpp
   PARENT_SCOPE
 )
 
-#RULES
 #LIBRARIES
 add_library(tdutils STATIC ${TDUTILS_SOURCE})
 
@@ -389,7 +401,8 @@ if (ANDROID)
 endif()
 
 if (CMAKE_SYSTEM_NAME MATCHES "NetBSD")
-  target_link_libraries(tdutils PUBLIC /usr/pkg/gcc5/i486--netbsdelf/lib/libatomic.so)
+  target_link_directories(tdutils PUBLIC /usr/pkg/gcc12/x86_64--netbsd/lib /usr/pkg/gcc12/i486--netbsdelf/lib)
+  target_link_libraries(tdutils PUBLIC atomic)
 endif()
 
 install(TARGETS tdutils EXPORT TdTargets

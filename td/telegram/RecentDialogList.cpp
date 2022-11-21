@@ -52,13 +52,13 @@ void RecentDialogList::save_dialogs() const {
       switch (dialog_id.get_type()) {
         case DialogType::User:
           if (!td_->contacts_manager_->is_user_contact(dialog_id.get_user_id())) {
-            username = td_->contacts_manager_->get_user_username(dialog_id.get_user_id());
+            username = td_->contacts_manager_->get_user_first_username(dialog_id.get_user_id());
           }
           break;
         case DialogType::Chat:
           break;
         case DialogType::Channel:
-          username = td_->contacts_manager_->get_channel_username(dialog_id.get_channel_id());
+          username = td_->contacts_manager_->get_channel_first_username(dialog_id.get_channel_id());
           break;
         case DialogType::SecretChat:
           break;
@@ -130,10 +130,7 @@ void RecentDialogList::on_load_dialogs(vector<string> &&found_dialogs) {
   CHECK(!promises.empty());
 
   if (G()->close_flag()) {
-    for (auto &promise : promises) {
-      promise.set_error(Global::request_aborted_error());
-    }
-    return;
+    return fail_promises(promises, Global::request_aborted_error());
   }
 
   auto newly_found_dialogs = std::move(dialog_ids_);
@@ -162,9 +159,7 @@ void RecentDialogList::on_load_dialogs(vector<string> &&found_dialogs) {
     save_dialogs();
   }
 
-  for (auto &promise : promises) {
-    promise.set_value(Unit());
-  }
+  set_promises(promises);
 }
 
 void RecentDialogList::add_dialog(DialogId dialog_id) {

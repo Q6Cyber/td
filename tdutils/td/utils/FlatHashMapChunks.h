@@ -36,7 +36,7 @@ namespace td {
 template <int shift>
 struct MaskIterator {
   uint64 mask;
-  explicit operator bool() const {
+  explicit operator bool() const noexcept {
     return mask != 0;
   }
   int pos() const {
@@ -469,7 +469,8 @@ class FlatHashTableChunks {
   struct ChunkIt {
     size_t chunk_i;
     size_t chunk_mask;
-    size_t shift{};
+    size_t shift;
+
     size_t pos() const {
       return chunk_i;
     }
@@ -482,7 +483,7 @@ class FlatHashTableChunks {
   };
 
   ChunkIt get_chunk_it(size_t chunk_i) {
-    return {chunk_i, chunks_.size() - 1};
+    return ChunkIt{chunk_i, chunks_.size() - 1, 0};
   }
 
   HashInfo calc_hash(const KeyT &key) {

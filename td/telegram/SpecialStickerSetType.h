@@ -29,6 +29,14 @@ class SpecialStickerSetType {
 
   static SpecialStickerSetType animated_dice(const string &emoji);
 
+  static SpecialStickerSetType premium_gifts();
+
+  static SpecialStickerSetType generic_animations();
+
+  static SpecialStickerSetType default_statuses();
+
+  static SpecialStickerSetType default_topic_icons();
+
   string get_dice_emoji() const;
 
   bool is_empty() const {

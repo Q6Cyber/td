@@ -15,6 +15,7 @@
 #include "td/utils/misc.h"
 #include "td/utils/Random.h"
 #include "td/utils/StorerBase.h"
+#include "td/utils/Time.h"
 #include "td/utils/tl_helpers.h"
 #include "td/utils/tl_parsers.h"
 #include "td/utils/tl_storers.h"
@@ -82,8 +83,8 @@ bool EventId::is_valid_id(int32 id) {
 
 class TQueueImpl final : public TQueue {
   static constexpr size_t MAX_EVENT_LENGTH = 65536 * 8;
-  static constexpr size_t MAX_QUEUE_EVENTS = 1000000;
-  static constexpr size_t MAX_TOTAL_EVENT_LENGTH = 1 << 30;
+  static constexpr size_t MAX_QUEUE_EVENTS = 100000;
+  static constexpr size_t MAX_TOTAL_EVENT_LENGTH = 1 << 27;
 
  public:
   void set_callback(unique_ptr<StorageCallback> callback) final {
@@ -157,7 +158,9 @@ class TQueueImpl final : public TQueue {
     while (true) {
       if (q.tail_id.empty()) {
         if (hint_new_id.empty()) {
-          q.tail_id = EventId::from_int32(Random::fast(2 * MAX_QUEUE_EVENTS + 1, EventId::MAX_ID / 2)).move_as_ok();
+          q.tail_id = EventId::from_int32(
+                          Random::fast(2 * max(static_cast<int>(MAX_QUEUE_EVENTS), 1000000) + 1, EventId::MAX_ID / 2))
+                          .move_as_ok();
         } else {
           q.tail_id = hint_new_id;
         }
@@ -214,6 +217,26 @@ class TQueueImpl final : public TQueue {
     pop(q, queue_id, it, q.tail_id);
   }
 
+  void clear(QueueId queue_id, size_t keep_count) final {
+    auto queue_it = queues_.find(queue_id);
+    if (queue_it == queues_.end()) {
+      return;
+    }
+    auto &q = queue_it->second;
+    auto size = get_size(q);
+    if (size <= keep_count) {
+      return;
+    }
+
+    auto end_it = q.events.end();
+    while (keep_count-- > 0) {
+      --end_it;
+    }
+    for (auto it = q.events.begin(); it != end_it;) {
+      pop(q, queue_id, it, q.tail_id);
+    }
+  }
+
   Result<size_t> get(QueueId queue_id, EventId from_id, bool forget_previous, int32 unix_time_now,
                      MutableSpan<Event> &result_events) final {
     auto it = queues_.find(queue_id);
@@ -234,8 +257,10 @@ class TQueueImpl final : public TQueue {
     return get_size(q);
   }
 
-  int64 run_gc(int32 unix_time_now) final {
+  std::pair<int64, bool> run_gc(int32 unix_time_now) final {
     int64 deleted_events = 0;
+    auto max_finish_time = Time::now() + 0.05;
+    int64 counter = 0;
     while (!queue_gc_at_.empty()) {
       auto it = queue_gc_at_.begin();
       if (it->first >= unix_time_now) {
@@ -247,23 +272,35 @@ class TQueueImpl final : public TQueue {
       int32 new_gc_at = 0;
 
       if (!q.events.empty()) {
-        auto head_id = q.events.begin()->first;
-        Event event;
-        MutableSpan<Event> span{&event, 1};
         size_t size_before = get_size(q);
-        do_get(queue_id, q, head_id, false, unix_time_now, span);
+        for (auto event_it = q.events.begin(); event_it != q.events.end();) {
+          auto &event = event_it->second;
+          if ((++counter & 128) == 0 && Time::now() >= max_finish_time) {
+            if (new_gc_at == 0) {
+              new_gc_at = event.expires_at;
+            }
+            break;
+          }
+          if (event.expires_at < unix_time_now || event.data.empty()) {
+            pop(q, queue_id, event_it, q.tail_id);
+          } else {
+            if (new_gc_at != 0) {
+              break;
+            }
+            new_gc_at = event.expires_at;
+            ++event_it;
+          }
+        }
         size_t size_after = get_size(q);
         CHECK(size_after <= size_before);
         deleted_events += size_before - size_after;
-        if (!span.empty()) {
-          CHECK(!event.data.empty());
-          new_gc_at = event.expires_at;
-          CHECK(new_gc_at >= unix_time_now);
-        }
       }
       schedule_queue_gc(queue_id, q, new_gc_at);
+      if (Time::now() >= max_finish_time) {
+        return {deleted_events, false};
+      }
     }
-    return deleted_events;
+    return {deleted_events, true};
   }
 
   size_t get_size(QueueId queue_id) const final {
