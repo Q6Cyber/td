@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2022
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2023
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -46,6 +46,7 @@
 #include "td/utils/algorithm.h"
 #include "td/utils/base64.h"
 #include "td/utils/buffer.h"
+#include "td/utils/HashTableUtils.h"
 #include "td/utils/HttpUrl.h"
 #include "td/utils/logging.h"
 #include "td/utils/misc.h"
@@ -57,7 +58,6 @@
 #include "td/utils/tl_parsers.h"
 
 #include <algorithm>
-#include <functional>
 
 namespace td {
 
@@ -861,12 +861,8 @@ Result<tl_object_ptr<telegram_api::InputBotInlineResult>> InlineQueriesManager::
   }
 
   if (file_type != FileType::Temp && content_url.find('.') == string::npos) {
-    auto r_file_id = td_->file_manager_->get_input_file_id(
-        file_type, make_tl_object<td_api::inputFileRemote>(content_url), DialogId(), false, false);
-    if (r_file_id.is_error()) {
-      return Status::Error(400, r_file_id.error().message());
-    }
-    auto file_id = r_file_id.ok();
+    TRY_RESULT(file_id, td_->file_manager_->get_input_file_id(
+                            file_type, make_tl_object<td_api::inputFileRemote>(content_url), DialogId(), false, false));
     FileView file_view = td_->file_manager_->get_file_view(file_id);
     CHECK(file_view.has_remote_location());
     if (file_view.is_encrypted()) {
@@ -981,10 +977,10 @@ uint64 InlineQueriesManager::send_inline_query(UserId bot_user_id, DialogId dial
     }
   }();
 
-  uint64 query_hash = std::hash<std::string>()(trim(query));
+  uint64 query_hash = Hash<string>()(trim(query));
   query_hash = query_hash * 2023654985u + bot_user_id.get();
   query_hash = query_hash * 2023654985u + static_cast<uint64>(peer_type);
-  query_hash = query_hash * 2023654985u + std::hash<std::string>()(offset);
+  query_hash = query_hash * 2023654985u + Hash<string>()(offset);
   if (r_bot_data.ok().need_location) {
     query_hash = query_hash * 2023654985u + static_cast<uint64>(user_location.get_latitude() * 1e4);
     query_hash = query_hash * 2023654985u + static_cast<uint64>(user_location.get_longitude() * 1e4);
@@ -1169,14 +1165,20 @@ tl_object_ptr<td_api::maskPosition> copy(const td_api::maskPosition &obj) {
 }
 
 template <>
-tl_object_ptr<td_api::StickerType> copy(const td_api::StickerType &obj) {
+tl_object_ptr<td_api::StickerFullType> copy(const td_api::StickerFullType &obj) {
   switch (obj.get_id()) {
-    case td_api::stickerTypeRegular::ID:
-      return td_api::make_object<td_api::stickerTypeRegular>();
-    case td_api::stickerTypeMask::ID:
-      return td_api::make_object<td_api::stickerTypeMask>();
-    case td_api::stickerTypeCustomEmoji::ID:
-      return td_api::make_object<td_api::stickerTypeCustomEmoji>();
+    case td_api::stickerFullTypeRegular::ID: {
+      auto &info = static_cast<const td_api::stickerFullTypeRegular &>(obj);
+      return td_api::make_object<td_api::stickerFullTypeRegular>(copy(info.premium_animation_));
+    }
+    case td_api::stickerFullTypeMask::ID: {
+      auto &info = static_cast<const td_api::stickerFullTypeMask &>(obj);
+      return td_api::make_object<td_api::stickerFullTypeMask>(copy(info.mask_position_));
+    }
+    case td_api::stickerFullTypeCustomEmoji::ID: {
+      auto &info = static_cast<const td_api::stickerFullTypeCustomEmoji &>(obj);
+      return td_api::make_object<td_api::stickerFullTypeCustomEmoji>(info.custom_emoji_id_, info.needs_repainting_);
+    }
     default:
       UNREACHABLE();
   }
@@ -1269,10 +1271,9 @@ tl_object_ptr<td_api::photo> copy(const td_api::photo &obj) {
 
 template <>
 tl_object_ptr<td_api::sticker> copy(const td_api::sticker &obj) {
-  return td_api::make_object<td_api::sticker>(obj.set_id_, obj.width_, obj.height_, obj.emoji_, copy(obj.format_),
-                                              copy(obj.type_), copy(obj.mask_position_), obj.custom_emoji_id_,
-                                              transform(obj.outline_, copy_closed_vector_path), copy(obj.thumbnail_),
-                                              obj.is_premium_, copy(obj.premium_animation_), copy(obj.sticker_));
+  return td_api::make_object<td_api::sticker>(
+      obj.id_, obj.set_id_, obj.width_, obj.height_, obj.emoji_, copy(obj.format_), copy(obj.full_type_),
+      transform(obj.outline_, copy_closed_vector_path), copy(obj.thumbnail_), copy(obj.sticker_));
 }
 
 template <>
@@ -1646,7 +1647,7 @@ void InlineQueriesManager::on_get_inline_query_results(DialogId dialog_id, UserI
           LOG_IF(ERROR, !is_photo) << "Wrong result type " << result->type_;
           auto photo = make_tl_object<td_api::inlineQueryResultPhoto>();
           photo->id_ = std::move(result->id_);
-          Photo p = get_photo(td_->file_manager_.get(), std::move(result->photo_), DialogId());
+          Photo p = get_photo(td_, std::move(result->photo_), DialogId());
           if (p.is_empty()) {
             LOG(ERROR) << "Receive empty cached photo in the result of inline query";
             break;
@@ -1677,7 +1678,7 @@ void InlineQueriesManager::on_get_inline_query_results(DialogId dialog_id, UserI
             article->hide_url_ = true;
           } else {
             LOG_IF(ERROR, result->url_ != article->url_)
-                << "Url has changed from " << article->url_ << " to " << result->url_;
+                << "URL has changed from " << article->url_ << " to " << result->url_;
             article->hide_url_ = false;
           }
           article->title_ = std::move(result->title_);

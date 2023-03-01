@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2022
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2023
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -476,15 +476,9 @@ class DialogDbAsync final : public DialogDbAsyncInterface {
         return;
       }
       sync_db_->begin_write_transaction().ensure();
-      for (auto &query : pending_writes_) {
-        query.set_value(Unit());
-      }
+      set_promises(pending_writes_);
       sync_db_->commit_transaction().ensure();
-      pending_writes_.clear();
-      for (auto &promise : finished_writes_) {
-        promise.set_value(Unit());
-      }
-      finished_writes_.clear();
+      set_promises(finished_writes_);
       cancel_timeout();
     }
 

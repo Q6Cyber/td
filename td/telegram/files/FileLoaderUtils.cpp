@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2022
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2023
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -32,7 +32,7 @@ int VERBOSITY_NAME(file_loader) = VERBOSITY_NAME(DEBUG) + 2;
 namespace {
 
 Result<std::pair<FileFd, string>> try_create_new_file(CSlice path, CSlice file_name) {
-  LOG(DEBUG) << "Trying to create new file " << file_name << " in the directory \"" << path << '"';
+  LOG(DEBUG) << "Trying to create new file \"" << file_name << "\" in the directory \"" << path << '"';
   auto name = PSTRING() << path << file_name;
   auto r_fd = FileFd::open(name, FileFd::Read | FileFd::Write | FileFd::CreateNew, 0640);
   if (r_fd.is_error()) {
@@ -332,7 +332,7 @@ Result<FullLocalLocationInfo> check_full_local_location(FullLocalLocationInfo lo
   if (size > MAX_FILE_SIZE) {
     return get_file_size_error("");
   }
-  if (location.file_type_ == FileType::Photo && size > MAX_PHOTO_SIZE) {
+  if (get_file_type_class(location.file_type_) == FileTypeClass::Photo && size > MAX_PHOTO_SIZE) {
     return get_file_size_error(" for a photo");
   }
   if (location.file_type_ == FileType::VideoNote &&
