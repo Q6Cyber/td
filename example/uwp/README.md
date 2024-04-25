@@ -6,10 +6,12 @@ This is an example of building TDLib SDK for Universal Windows Platform and an e
 
 * Download and install Microsoft Visual Studio 2015+ with Windows 10 SDK. We recommend to use the latest available versions of Microsoft Visual Studio and Windows 10 SDK.
 * Download and install [CMake](https://cmake.org/download/).
-* Install [vcpkg](https://github.com/Microsoft/vcpkg#quick-start) or update it to the latest version using `vcpkg update` and following received instructions.
-* Install `zlib` and `openssl` for all UWP architectures and `gperf` for x86 using `vcpkg`:
+* Install `zlib` and `openssl` for all UWP architectures and `gperf` for x86 using [vcpkg](https://github.com/Microsoft/vcpkg#quick-start):
 ```
-cd <path to vcpkg>
+git clone https://github.com/Microsoft/vcpkg.git
+cd vcpkg
+git checkout cd5e746ec203c8c3c61647e0886a8df8c1e78e41
+.\bootstrap-vcpkg.bat
 .\vcpkg.exe install gperf:x86-windows openssl:arm-uwp openssl:arm64-uwp openssl:x64-uwp openssl:x86-uwp zlib:arm-uwp zlib:arm64-uwp zlib:x64-uwp zlib:x86-uwp
 ```
 * (Optional. For XML documentation generation.) Download [PHP](https://windows.php.net/download). Add the path to php.exe to the PATH environment variable.
@@ -23,6 +25,8 @@ If you need to restart the build from scratch, call `.\build.ps1 -vcpkg_root C:\
 * Install Visual Studio Extension "TDLib for Universal Windows Platform" located at `build-uwp\vsix\tdlib.vsix`, which was created on the previous step by `build.ps1` script.
 
 After this `TDLib` can be used from any UWP project, built in Visual Studio.
+
+Alternatively, you can build `TDLib` as a NuGet package, adding the option `-nupkg` to the `.\build.ps1` script invocation. The resulting package will be placed in the directory `build-uwp\nupkg`.
 
 ## Example of usage
 

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2023
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -17,6 +17,12 @@ void SendCodeHelper::on_sent_code(telegram_api::object_ptr<telegram_api::auth_se
   sent_code_info_ = get_sent_authentication_code_info(std::move(sent_code->type_));
   next_code_info_ = get_authentication_code_info(std::move(sent_code->next_type_));
   next_code_timestamp_ = Time::now() + sent_code->timeout_;
+
+  if (next_code_info_.type == AuthenticationCodeInfo::Type::None &&
+      (sent_code_info_.type == AuthenticationCodeInfo::Type::FirebaseAndroid ||
+       sent_code_info_.type == AuthenticationCodeInfo::Type::FirebaseIos)) {
+    next_code_info_ = {AuthenticationCodeInfo::Type::Sms, sent_code_info_.length, string()};
+  }
 }
 
 void SendCodeHelper::on_phone_code_hash(string &&phone_code_hash) {

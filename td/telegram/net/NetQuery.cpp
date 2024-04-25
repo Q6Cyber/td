@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2023
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -34,10 +34,9 @@ void NetQuery::debug(string state, bool may_be_lost) {
   }
 }
 
-NetQuery::NetQuery(State state, uint64 id, BufferSlice &&query, BufferSlice &&answer, DcId dc_id, Type type,
-                   AuthFlag auth_flag, GzipFlag gzip_flag, int32 tl_constructor, int32 total_timeout_limit,
-                   NetQueryStats *stats, vector<ChainId> chain_ids)
-    : state_(state)
+NetQuery::NetQuery(uint64 id, BufferSlice &&query, DcId dc_id, Type type, AuthFlag auth_flag, GzipFlag gzip_flag,
+                   int32 tl_constructor, int32 total_timeout_limit, NetQueryStats *stats, vector<ChainId> chain_ids)
+    : state_(State::Query)
     , type_(type)
     , auth_flag_(auth_flag)
     , gzip_flag_(gzip_flag)
@@ -45,7 +44,6 @@ NetQuery::NetQuery(State state, uint64 id, BufferSlice &&query, BufferSlice &&an
     , status_()
     , id_(id)
     , query_(std::move(query))
-    , answer_(std::move(answer))
     , tl_constructor_(tl_constructor)
     , total_timeout_limit_(total_timeout_limit) {
   CHECK(id_ != 0);
@@ -62,17 +60,17 @@ NetQuery::NetQuery(State state, uint64 id, BufferSlice &&query, BufferSlice &&an
 }
 
 void NetQuery::on_net_write(size_t size) {
-  if (file_type_ == -1) {
-    return;
+  const auto &callbacks = G()->get_net_stats_file_callbacks();
+  if (static_cast<size_t>(file_type_) < callbacks.size()) {
+    callbacks[file_type_]->on_write(size);
   }
-  G()->get_net_stats_file_callbacks().at(file_type_)->on_write(size);
 }
 
 void NetQuery::on_net_read(size_t size) {
-  if (file_type_ == -1) {
-    return;
+  const auto &callbacks = G()->get_net_stats_file_callbacks();
+  if (static_cast<size_t>(file_type_) < callbacks.size()) {
+    callbacks[file_type_]->on_read(size);
   }
-  G()->get_net_stats_file_callbacks().at(file_type_)->on_read(size);
 }
 
 int32 NetQuery::tl_magic(const BufferSlice &buffer_slice) {

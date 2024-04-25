@@ -1,25 +1,34 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2023
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
 //
 #include "td/telegram/UpdatesManager.h"
 
+#include "td/telegram/AccountManager.h"
 #include "td/telegram/AnimationsManager.h"
 #include "td/telegram/AttachMenuManager.h"
 #include "td/telegram/AuthManager.h"
 #include "td/telegram/AutosaveManager.h"
+#include "td/telegram/BoostManager.h"
+#include "td/telegram/BusinessConnectionId.h"
+#include "td/telegram/BusinessConnectionManager.h"
 #include "td/telegram/CallbackQueriesManager.h"
 #include "td/telegram/CallManager.h"
 #include "td/telegram/ChannelId.h"
+#include "td/telegram/ChannelType.h"
 #include "td/telegram/ChatId.h"
+#include "td/telegram/ChatManager.h"
 #include "td/telegram/ConfigManager.h"
-#include "td/telegram/ContactsManager.h"
 #include "td/telegram/DialogAction.h"
+#include "td/telegram/DialogActionManager.h"
+#include "td/telegram/DialogFilterManager.h"
 #include "td/telegram/DialogId.h"
 #include "td/telegram/DialogInviteLink.h"
+#include "td/telegram/DialogManager.h"
 #include "td/telegram/DialogParticipant.h"
+#include "td/telegram/DialogParticipantManager.h"
 #include "td/telegram/DownloadManager.h"
 #include "td/telegram/EmojiStatus.h"
 #include "td/telegram/FolderId.h"
@@ -30,6 +39,7 @@
 #include "td/telegram/LanguagePackManager.h"
 #include "td/telegram/Location.h"
 #include "td/telegram/MessageId.h"
+#include "td/telegram/MessageSender.h"
 #include "td/telegram/MessagesManager.h"
 #include "td/telegram/MessageTtl.h"
 #include "td/telegram/misc.h"
@@ -40,25 +50,38 @@
 #include "td/telegram/NotificationSettingsScope.h"
 #include "td/telegram/OptionManager.h"
 #include "td/telegram/OrderInfo.h"
+#include "td/telegram/PeopleNearbyManager.h"
 #include "td/telegram/PollId.h"
 #include "td/telegram/PollManager.h"
 #include "td/telegram/PrivacyManager.h"
 #include "td/telegram/PublicDialogType.h"
+#include "td/telegram/QuickReplyManager.h"
+#include "td/telegram/QuickReplyShortcutId.h"
+#include "td/telegram/ReactionListType.h"
+#include "td/telegram/ReactionManager.h"
+#include "td/telegram/ReactionType.h"
+#include "td/telegram/SavedMessagesManager.h"
 #include "td/telegram/ScheduledServerMessageId.h"
 #include "td/telegram/SecretChatId.h"
 #include "td/telegram/SecretChatsManager.h"
 #include "td/telegram/ServerMessageId.h"
 #include "td/telegram/SpecialStickerSetType.h"
 #include "td/telegram/StateManager.h"
+#include "td/telegram/StickerListType.h"
 #include "td/telegram/StickerSetId.h"
 #include "td/telegram/StickersManager.h"
 #include "td/telegram/StickerType.h"
+#include "td/telegram/StoryId.h"
+#include "td/telegram/StoryManager.h"
 #include "td/telegram/Td.h"
 #include "td/telegram/td_api.h"
 #include "td/telegram/TdDb.h"
-#include "td/telegram/TdParameters.h"
+#include "td/telegram/telegram_api.h"
 #include "td/telegram/telegram_api.hpp"
 #include "td/telegram/ThemeManager.h"
+#include "td/telegram/TimeZoneManager.h"
+#include "td/telegram/TranscriptionManager.h"
+#include "td/telegram/UserManager.h"
 #include "td/telegram/Usernames.h"
 #include "td/telegram/WebPagesManager.h"
 
@@ -77,7 +100,6 @@
 #include "td/utils/StringBuilder.h"
 #include "td/utils/Time.h"
 
-#include <iterator>
 #include <limits>
 
 namespace td {
@@ -153,6 +175,19 @@ class PingServerQuery final : public Td::ResultHandler {
   }
 };
 
+class InitSessionQuery final : public Td::ResultHandler {
+ public:
+  void send() {
+    send_query(G()->net_query_creator().create(telegram_api::help_getCdnConfig()));
+  }
+
+  void on_result(BufferSlice) final {
+  }
+
+  void on_error(Status) final {
+  }
+};
+
 class GetDifferenceQuery final : public Td::ResultHandler {
   Promise<tl_object_ptr<telegram_api::updates_Difference>> promise_;
 
@@ -162,7 +197,7 @@ class GetDifferenceQuery final : public Td::ResultHandler {
   }
 
   void send(int32 pts, int32 date, int32 qts) {
-    send_query(G()->net_query_creator().create(telegram_api::updates_getDifference(0, pts, 0, date, qts)));
+    send_query(G()->net_query_creator().create(telegram_api::updates_getDifference(0, pts, 0, 0, date, qts, 0)));
   }
 
   void on_result(BufferSlice packet) final {
@@ -180,14 +215,63 @@ class GetDifferenceQuery final : public Td::ResultHandler {
   }
 };
 
+class ConfirmPtsQtsQuery final : public Td::ResultHandler {
+ public:
+  void send(int32 pts, int32 qts) {
+    int32 flags =
+        telegram_api::updates_getDifference::PTS_LIMIT_MASK | telegram_api::updates_getDifference::QTS_LIMIT_MASK;
+    send_query(G()->net_query_creator().create(
+        telegram_api::updates_getDifference(flags, pts, 1, 0, std::numeric_limits<int32>::max(), qts, 1)));
+  }
+
+  void on_result(BufferSlice packet) final {
+    auto result_ptr = fetch_result<telegram_api::updates_getDifference>(packet);
+    if (result_ptr.is_error()) {
+      return on_error(result_ptr.move_as_error());
+    }
+  }
+
+  void on_error(Status status) final {
+    if (!G()->is_expected_error(status)) {
+      LOG(ERROR) << "Failed to confirm PTS/QTS: " << status;
+    }
+  }
+};
+
+class GetPtsUpdateQuery final : public Td::ResultHandler {
+  Promise<tl_object_ptr<telegram_api::updates_Difference>> promise_;
+
+ public:
+  explicit GetPtsUpdateQuery(Promise<tl_object_ptr<telegram_api::updates_Difference>> &&promise)
+      : promise_(std::move(promise)) {
+  }
+
+  void send(int32 pts) {
+    int32 flags =
+        telegram_api::updates_getDifference::PTS_LIMIT_MASK | telegram_api::updates_getDifference::QTS_LIMIT_MASK;
+    send_query(G()->net_query_creator().create(
+        telegram_api::updates_getDifference(flags, pts, 1, 0, std::numeric_limits<int32>::max(), 0, 0)));
+  }
+
+  void on_result(BufferSlice packet) final {
+    auto result_ptr = fetch_result<telegram_api::updates_getDifference>(packet);
+    if (result_ptr.is_error()) {
+      return on_error(result_ptr.move_as_error());
+    }
+
+    promise_.set_value(result_ptr.move_as_ok());
+  }
+
+  void on_error(Status status) final {
+    promise_.set_error(std::move(status));
+  }
+};
+
 UpdatesManager::UpdatesManager(Td *td, ActorShared<> parent) : td_(td), parent_(std::move(parent)) {
   last_pts_save_time_ = last_qts_save_time_ = Time::now() - 2 * MAX_PTS_SAVE_DELAY;
 
-  pending_audio_transcription_timeout_.set_callback(on_pending_audio_transcription_timeout_callback);
-  pending_audio_transcription_timeout_.set_callback_data(static_cast<void *>(td_));
-
-  if (td_->option_manager_->get_option_integer("since_last_open") < 3600) {
-    finished_first_get_difference_ = true;
+  if (!td_->auth_manager_->is_authorized() || !td_->auth_manager_->is_bot()) {
+    skipped_postponed_updates_after_start_ = 0;
   }
 }
 
@@ -198,6 +282,10 @@ void UpdatesManager::tear_down() {
 }
 
 void UpdatesManager::start_up() {
+  if (td_->auth_manager_->is_bot()) {
+    return;
+  }
+
   class StateCallback final : public StateManager::Callback {
    public:
     explicit StateCallback(ActorId<UpdatesManager> parent) : parent_(std::move(parent)) {
@@ -239,6 +327,44 @@ ActorShared<UpdatesManager> UpdatesManager::create_reference() {
   return actor_shared(this, 1);
 }
 
+void UpdatesManager::check_pts_gap(void *td) {
+  if (G()->close_flag()) {
+    return;
+  }
+
+  CHECK(td != nullptr);
+  static_cast<Td *>(td)->updates_manager_.get()->repair_pts_gap();
+}
+
+void UpdatesManager::repair_pts_gap() {
+  if (!td_->auth_manager_->is_authorized() || running_get_difference_ || !postponed_pts_updates_.empty()) {
+    return;
+  }
+  auto pts = get_pts() + 1;
+  if (pending_pts_updates_.empty()) {
+    return;
+  }
+  auto it = pending_pts_updates_.begin();
+  if (it->pts != pts + it->pts_count) {
+    return;
+  }
+  if (last_fetched_pts_ == pts) {
+    VLOG(get_difference) << "Don't fetch again update with PTS = " << pts;
+    return;
+  }
+  last_fetched_pts_ = pts;
+
+  VLOG(get_difference) << "Fetch update with PTS = " << pts;
+  pts_short_gap_++;
+  auto promise =
+      PromiseCreator::lambda([pts](Result<telegram_api::object_ptr<telegram_api::updates_Difference>> result) {
+        if (result.is_ok()) {
+          send_closure(G()->updates_manager(), &UpdatesManager::on_get_pts_update, pts, result.move_as_ok());
+        }
+      });
+  td_->create_handler<GetPtsUpdateQuery>(std::move(promise))->send(pts - 1);
+}
+
 void UpdatesManager::fill_pts_gap(void *td) {
   if (G()->close_flag()) {
     return;
@@ -247,16 +373,31 @@ void UpdatesManager::fill_pts_gap(void *td) {
   CHECK(td != nullptr);
   auto updates_manager = static_cast<Td *>(td)->updates_manager_.get();
   auto min_pts = std::numeric_limits<int32>::max();
+  auto min_pts_count = 0;
+  const telegram_api::Update *first_update = nullptr;
   auto max_pts = 0;
   if (!updates_manager->pending_pts_updates_.empty()) {
-    min_pts = min(min_pts, updates_manager->pending_pts_updates_.begin()->first);
-    max_pts = max(max_pts, updates_manager->pending_pts_updates_.rbegin()->first);
+    auto &min_update = *updates_manager->pending_pts_updates_.begin();
+    if (min_update.pts < min_pts) {
+      min_pts = min_update.pts;
+      min_pts_count = min_update.pts_count;
+      first_update = min_update.update.get();
+    }
+    max_pts = max(max_pts, updates_manager->pending_pts_updates_.rbegin()->pts);
   }
   if (!updates_manager->postponed_pts_updates_.empty()) {
-    min_pts = min(min_pts, updates_manager->postponed_pts_updates_.begin()->first);
-    max_pts = max(max_pts, updates_manager->postponed_pts_updates_.rbegin()->first);
+    auto &min_update = *updates_manager->postponed_pts_updates_.begin();
+    if (min_update.pts < min_pts) {
+      min_pts = min_update.pts;
+      min_pts_count = min_update.pts_count;
+      first_update = min_update.update.get();
+    }
+    max_pts = max(max_pts, updates_manager->postponed_pts_updates_.rbegin()->pts);
   }
-  string source = PSTRING() << "PTS from " << updates_manager->get_pts() << " to " << min_pts << '-' << max_pts;
+  string source = PSTRING() << "PTS from " << updates_manager->get_pts() << " to " << min_pts << "(-" << min_pts_count
+                            << ")-" << max_pts << ' '
+                            << (first_update == nullptr ? string() : oneline(to_string(*first_update)));
+  updates_manager->pts_gap_++;
   fill_gap(td, source.c_str());
 }
 
@@ -270,8 +411,8 @@ void UpdatesManager::fill_seq_gap(void *td) {
   auto min_seq = std::numeric_limits<int32>::max();
   auto max_seq = 0;
   if (!updates_manager->pending_seq_updates_.empty()) {
-    min_seq = updates_manager->pending_seq_updates_.begin()->first;
-    max_seq = updates_manager->pending_seq_updates_.rbegin()->second.seq_end;
+    min_seq = updates_manager->pending_seq_updates_.begin()->seq_begin;
+    max_seq = updates_manager->pending_seq_updates_.rbegin()->seq_end;
   }
   string source = PSTRING() << "seq from " << updates_manager->seq_ << " to " << min_seq << '-' << max_seq;
   fill_gap(td, source.c_str());
@@ -291,6 +432,7 @@ void UpdatesManager::fill_qts_gap(void *td) {
     max_qts = updates_manager->pending_qts_updates_.rbegin()->first;
   }
   string source = PSTRING() << "QTS from " << updates_manager->get_qts() << " to " << min_qts << '-' << max_qts;
+  updates_manager->qts_gap_++;
   fill_gap(td, source.c_str());
 }
 
@@ -328,20 +470,6 @@ void UpdatesManager::fill_gap(void *td, const char *source) {
   }
 
   updates_manager->get_difference("fill_gap");
-}
-
-void UpdatesManager::on_pending_audio_transcription_timeout_callback(void *td, int64 transcription_id) {
-  if (G()->close_flag()) {
-    return;
-  }
-  CHECK(td != nullptr);
-  if (!static_cast<Td *>(td)->auth_manager_->is_authorized()) {
-    return;
-  }
-
-  auto updates_manager = static_cast<Td *>(td)->updates_manager_.get();
-  send_closure_later(updates_manager->actor_id(updates_manager), &UpdatesManager::on_pending_audio_transcription_failed,
-                     transcription_id, Status::Error(500, "Timeout expired"));
 }
 
 void UpdatesManager::get_difference(const char *source) {
@@ -393,22 +521,26 @@ void UpdatesManager::run_get_difference(bool is_recursive, const char *source) {
     }
   });
   td_->create_handler<GetDifferenceQuery>(std::move(promise))->send(pts, date, qts);
-  last_get_difference_pts_ = pts;
-  last_get_difference_qts_ = qts;
+  last_confirmed_pts_ = pts;
+  last_confirmed_qts_ = qts;
 }
 
 void UpdatesManager::before_get_difference(bool is_initial) {
   // may be called many times before after_get_difference is called
   send_closure(G()->state_manager(), &StateManager::on_synchronized, false);
 
+  vector<Promise<Unit>> promises;
   if (can_postpone_updates()) {
-    postponed_pts_updates_.insert(std::make_move_iterator(pending_pts_updates_.begin()),
-                                  std::make_move_iterator(pending_pts_updates_.end()));
+    for (auto &update : pending_pts_updates_) {
+      postponed_pts_updates_.emplace(std::move(update.update), update.pts, update.pts_count, update.receive_time,
+                                     std::move(update.promise));
+    }
   } else {
     for (auto &update : pending_pts_updates_) {
-      update.second.promise.set_value(Unit());
+      promises.push_back(std::move(update.promise));
     }
   }
+  set_promises(promises);
 
   drop_all_pending_pts_updates();
 
@@ -450,7 +582,7 @@ void UpdatesManager::save_pts(int32 pts) {
     G()->td_db()->get_binlog_pmc()->erase("updates.pts");
     last_pts_save_time_ -= 2 * MAX_PTS_SAVE_DELAY;
     pending_pts_ = 0;
-  } else if (!G()->ignore_background_updates()) {
+  } else if (!td_->ignore_background_updates()) {
     auto now = Time::now();
     auto delay = last_pts_save_time_ + MAX_PTS_SAVE_DELAY - now;
     if (delay <= 0 || !td_->auth_manager_->is_bot()) {
@@ -467,7 +599,7 @@ void UpdatesManager::save_pts(int32 pts) {
 }
 
 void UpdatesManager::save_qts(int32 qts) {
-  if (!G()->ignore_background_updates()) {
+  if (!td_->ignore_background_updates()) {
     auto now = Time::now();
     auto delay = last_qts_save_time_ + MAX_PTS_SAVE_DELAY - now;
     if (delay <= 0 || !td_->auth_manager_->is_bot()) {
@@ -499,23 +631,34 @@ void UpdatesManager::timeout_expired() {
 Promise<> UpdatesManager::set_pts(int32 pts, const char *source) {
   if (pts == std::numeric_limits<int32>::max()) {
     LOG(WARNING) << "Update PTS from " << get_pts() << " to -1 from " << source;
-    save_pts(pts);
+    save_pts(pts);  // drop saved PTS value
     auto result = add_pts(pts);
     init_state();
     return result;
   }
   Promise<> result;
-  if (pts > get_pts() || (0 < pts && pts < get_pts() - 399999)) {  // PTS can only go up or drop cardinally
-    if (pts < get_pts() - 399999) {
-      LOG(WARNING) << "PTS decreases from " << get_pts() << " to " << pts << " from " << source;
+  auto old_pts = get_pts();
+  if (pts > old_pts || (0 < pts && pts < old_pts - 1000009)) {  // PTS can only go up or drop cardinally
+    if (pts < old_pts - 1000009) {
+      LOG(WARNING) << "PTS decreases from " << old_pts << " to " << pts << " from " << source;
     } else {
-      LOG(INFO) << "Update PTS from " << get_pts() << " to " << pts << " from " << source;
+      LOG(INFO) << "Update PTS from " << old_pts << " to " << pts << " from " << source;
+      if (old_pts > 0) {
+        pts_diff_ += pts - old_pts;
+        if (pts_diff_ >= 1000000) {
+          LOG(WARNING) << "Fixed " << pts_gap_ << " PTS gaps and " << pts_fixed_short_gap_ << " short gaps by sending "
+                       << pts_short_gap_ << " requests";
+          pts_short_gap_ = 0;
+          pts_fixed_short_gap_ = 0;
+          pts_gap_ = 0;
+          pts_diff_ = 0;
+        }
+      }
     }
 
     result = add_pts(pts);
-    if (last_get_difference_pts_ < get_pts() - FORCED_GET_DIFFERENCE_PTS_DIFF) {
-      last_get_difference_pts_ = get_pts();
-      schedule_get_difference("rare PTS getDifference");
+    if (last_confirmed_pts_ < get_pts() - FORCED_GET_DIFFERENCE_PTS_DIFF && last_confirmed_pts_ != 0) {
+      confirm_pts_qts(get_qts());
     }
   } else if (pts < get_pts() && (pts > 1 || td_->option_manager_->get_option_integer("session_count") <= 1)) {
     LOG(ERROR) << "Receive wrong PTS = " << pts << " from " << source << ". Current PTS = " << get_pts();
@@ -544,7 +687,7 @@ void UpdatesManager::set_date(int32 date, bool from_update, string date_source) 
 
     date_ = date;
     date_source_ = std::move(date_source);
-    if (!G()->ignore_background_updates()) {
+    if (!td_->ignore_background_updates()) {
       G()->td_db()->get_binlog_pmc()->set("updates.date", to_string(date));
     }
   } else if (date < date_) {
@@ -561,15 +704,15 @@ void UpdatesManager::set_date(int32 date, bool from_update, string date_source) 
 }
 
 bool UpdatesManager::is_acceptable_user(UserId user_id) const {
-  return td_->contacts_manager_->have_user_force(user_id) && td_->contacts_manager_->have_user(user_id);
+  return td_->user_manager_->have_user_force(user_id, "is_acceptable_user") && td_->user_manager_->have_user(user_id);
 }
 
 bool UpdatesManager::is_acceptable_chat(ChatId chat_id) const {
-  return td_->contacts_manager_->have_chat_force(chat_id);
+  return td_->chat_manager_->have_chat_force(chat_id, "is_acceptable_chat");
 }
 
 bool UpdatesManager::is_acceptable_channel(ChannelId channel_id) const {
-  return td_->contacts_manager_->have_channel_force(channel_id);
+  return td_->chat_manager_->have_channel_force(channel_id, "is_acceptable_channel");
 }
 
 bool UpdatesManager::is_acceptable_peer(const tl_object_ptr<telegram_api::Peer> &peer) const {
@@ -610,7 +753,7 @@ bool UpdatesManager::is_acceptable_message_entities(
     if (entity->get_id() == telegram_api::messageEntityMentionName::ID) {
       auto entity_mention_name = static_cast<const telegram_api::messageEntityMentionName *>(entity.get());
       UserId user_id(entity_mention_name->user_id_);
-      if (!is_acceptable_user(user_id) || td_->contacts_manager_->get_input_user(user_id).is_error()) {
+      if (!is_acceptable_user(user_id) || td_->user_manager_->get_input_user(user_id).is_error()) {
         return false;
       }
     }
@@ -627,7 +770,7 @@ bool UpdatesManager::is_acceptable_reply_markup(const tl_object_ptr<telegram_api
       if (button->get_id() == telegram_api::keyboardButtonUserProfile::ID) {
         auto user_profile_button = static_cast<const telegram_api::keyboardButtonUserProfile *>(button.get());
         UserId user_id(user_profile_button->user_id_);
-        if (!is_acceptable_user(user_id) || td_->contacts_manager_->get_input_user(user_id).is_error()) {
+        if (!is_acceptable_user(user_id) || td_->user_manager_->get_input_user(user_id).is_error()) {
           return false;
         }
       }
@@ -637,15 +780,27 @@ bool UpdatesManager::is_acceptable_reply_markup(const tl_object_ptr<telegram_api
 }
 
 bool UpdatesManager::is_acceptable_message_reply_header(
-    const telegram_api::object_ptr<telegram_api::messageReplyHeader> &header) const {
+    const telegram_api::object_ptr<telegram_api::MessageReplyHeader> &header) const {
   if (header == nullptr) {
     return true;
   }
 
-  if (!is_acceptable_peer(header->reply_to_peer_id_)) {
-    return false;
+  switch (header->get_id()) {
+    case telegram_api::messageReplyHeader::ID: {
+      auto reply_header = static_cast<const telegram_api::messageReplyHeader *>(header.get());
+      return is_acceptable_peer(reply_header->reply_to_peer_id_) &&
+             is_acceptable_message_forward_header(reply_header->reply_from_) &&
+             is_acceptable_message_entities(reply_header->quote_entities_) &&
+             is_acceptable_message_media(reply_header->reply_media_);
+    }
+    case telegram_api::messageReplyStoryHeader::ID: {
+      auto reply_header = static_cast<const telegram_api::messageReplyStoryHeader *>(header.get());
+      return is_acceptable_peer(reply_header->peer_);
+    }
+    default:
+      UNREACHABLE();
+      return true;
   }
-  return true;
 }
 
 bool UpdatesManager::is_acceptable_message_forward_header(
@@ -661,6 +816,85 @@ bool UpdatesManager::is_acceptable_message_forward_header(
     return false;
   }
   return true;
+}
+
+bool UpdatesManager::is_acceptable_message_media(
+    const telegram_api::object_ptr<telegram_api::MessageMedia> &media_ptr) const {
+  if (media_ptr == nullptr) {
+    return true;
+  }
+  switch (media_ptr->get_id()) {
+    case telegram_api::messageMediaContact::ID: {
+      auto message_media = static_cast<const telegram_api::messageMediaContact *>(media_ptr.get());
+      UserId user_id(message_media->user_id_);
+      return user_id == UserId() || is_acceptable_user(user_id);
+    }
+    case telegram_api::messageMediaStory::ID: {
+      auto message_media = static_cast<const telegram_api::messageMediaStory *>(media_ptr.get());
+      return is_acceptable_peer(message_media->peer_);
+    }
+    case telegram_api::messageMediaGiveaway::ID: {
+      auto message_media = static_cast<const telegram_api::messageMediaGiveaway *>(media_ptr.get());
+      for (auto channel_id : message_media->channels_) {
+        if (!is_acceptable_channel(ChannelId(channel_id))) {
+          return false;
+        }
+      }
+      return true;
+    }
+    case telegram_api::messageMediaGiveawayResults::ID: {
+      auto message_media = static_cast<const telegram_api::messageMediaGiveawayResults *>(media_ptr.get());
+      if (!is_acceptable_channel(ChannelId(message_media->channel_id_))) {
+        return false;
+      }
+      for (auto user_id : message_media->winners_) {
+        if (!is_acceptable_user(UserId(user_id))) {
+          return false;
+        }
+      }
+      return true;
+    }
+    case telegram_api::messageMediaPoll::ID:
+      /*
+      // the users and chats are always min, so no need to check
+      auto message_media_poll = static_cast<const telegram_api::messageMediaPoll *>(media_ptr.get());
+      for (auto recent_voter : message_media_poll->results_->recent_voters_) {
+        if (!is_acceptable_peer(recent_voter)) {
+          return false;
+        }
+      }
+      */
+      return true;
+    case telegram_api::messageMediaWebPage::ID:
+      /*
+      // the channel is always min, so no need to check
+      auto message_media_web_page = static_cast<const telegram_api::messageMediaWebPage *>(media_ptr.get());
+      if (message_media_web_page->webpage_->get_id() == telegram_api::webPage::ID) {
+        auto web_page = static_cast<const telegram_api::webPage *>(message_media_web_page->webpage_.get());
+        if (web_page->cached_page_ != nullptr) {
+          const vector<tl_object_ptr<telegram_api::PageBlock>> *page_blocks = nullptr;
+          downcast_call(*web_page->cached_page_, [&page_blocks](auto &page) { page_blocks = &page.blocks_; });
+          CHECK(page_blocks != nullptr);
+          for (auto &page_block : *page_blocks) {
+            if (page_block->get_id() == telegram_api::pageBlockChannel::ID) {
+              auto page_block_channel = static_cast<const telegram_api::pageBlockChannel *>(page_block.get());
+              auto channel_id = ChatManager::get_channel_id(page_block_channel->channel_);
+              if (channel_id.is_valid()) {
+                if (!is_acceptable_channel(channel_id)) {
+                  return false;
+                }
+              } else {
+                LOG(ERROR) << "Receive wrong channel " << to_string(page_block_channel->channel_);
+              }
+            }
+          }
+        }
+      }
+      */
+      return true;
+    default:
+      return true;
+  }
 }
 
 bool UpdatesManager::is_acceptable_message(const telegram_api::Message *message_ptr) const {
@@ -687,7 +921,7 @@ bool UpdatesManager::is_acceptable_message(const telegram_api::Message *message_
         return false;
       }
 
-      if ((message->flags_ & MessagesManager::MESSAGE_FLAG_IS_SENT_VIA_BOT) &&
+      if ((message->flags_ & telegram_api::message::VIA_BOT_ID_MASK) &&
           !is_acceptable_user(UserId(message->via_bot_id_))) {
         return false;
       }
@@ -696,56 +930,8 @@ bool UpdatesManager::is_acceptable_message(const telegram_api::Message *message_
         return false;
       }
 
-      if (message->media_ != nullptr) {
-        auto media_id = message->media_->get_id();
-        if (media_id == telegram_api::messageMediaContact::ID) {
-          auto message_media_contact = static_cast<const telegram_api::messageMediaContact *>(message->media_.get());
-          UserId user_id(message_media_contact->user_id_);
-          if (user_id != UserId() && !is_acceptable_user(user_id)) {
-            return false;
-          }
-        }
-        /*
-        // the users are always min, so no need to check
-        if (media_id == telegram_api::messageMediaPoll::ID) {
-          auto message_media_poll = static_cast<const telegram_api::messageMediaPoll *>(message->media_.get());
-          for (auto recent_voter_user_id : message_media_poll->results_->recent_voters_) {
-            UserId user_id(recent_voter_user_id);
-            if (!is_acceptable_user(user_id)) {
-              return false;
-            }
-          }
-        }
-        */
-        /*
-        // the channel is always min, so no need to check
-        if (media_id == telegram_api::messageMediaWebPage::ID) {
-          auto message_media_web_page = static_cast<const telegram_api::messageMediaWebPage *>(message->media_.get());
-          if (message_media_web_page->webpage_->get_id() == telegram_api::webPage::ID) {
-            auto web_page = static_cast<const telegram_api::webPage *>(message_media_web_page->webpage_.get());
-            if (web_page->cached_page_ != nullptr) {
-              const vector<tl_object_ptr<telegram_api::PageBlock>> *page_blocks = nullptr;
-              downcast_call(*web_page->cached_page_, [&page_blocks](auto &page) { page_blocks = &page.blocks_; });
-              CHECK(page_blocks != nullptr);
-              for (auto &page_block : *page_blocks) {
-                if (page_block->get_id() == telegram_api::pageBlockChannel::ID) {
-                  auto page_block_channel = static_cast<const telegram_api::pageBlockChannel *>(page_block.get());
-                  auto channel_id = ContactsManager::get_channel_id(page_block_channel->channel_);
-                  if (channel_id.is_valid()) {
-                    if (!is_acceptable_channel(channel_id)) {
-                      return false;
-                    }
-                  } else {
-                    LOG(ERROR) << "Receive wrong channel " << to_string(page_block_channel->channel_);
-                  }
-                }
-              }
-            }
-          }
-        }
-        */
-      } else {
-        CHECK(message->media_ == nullptr);
+      if (!is_acceptable_message_media(message->media_)) {
+        return false;
       }
 
       /*
@@ -802,6 +988,11 @@ bool UpdatesManager::is_acceptable_message(const telegram_api::Message *message_
         case telegram_api::messageActionTopicCreate::ID:
         case telegram_api::messageActionTopicEdit::ID:
         case telegram_api::messageActionSuggestProfilePhoto::ID:
+        case telegram_api::messageActionSetChatWallPaper::ID:
+        case telegram_api::messageActionGiveawayLaunch::ID:
+        case telegram_api::messageActionGiveawayResults::ID:
+        case telegram_api::messageActionBoostApply::ID:
+        case telegram_api::messageActionRequestedPeerSentMe::ID:
           break;
         case telegram_api::messageActionChatCreate::ID: {
           auto chat_create = static_cast<const telegram_api::messageActionChatCreate *>(action);
@@ -874,7 +1065,18 @@ bool UpdatesManager::is_acceptable_message(const telegram_api::Message *message_
         }
         case telegram_api::messageActionRequestedPeer::ID: {
           auto requested_peer = static_cast<const telegram_api::messageActionRequestedPeer *>(action);
-          if (!td_->auth_manager_->is_bot() && !is_acceptable_peer(requested_peer->peer_)) {
+          if (!td_->auth_manager_->is_bot()) {
+            for (auto &peer : requested_peer->peers_) {
+              if (!is_acceptable_peer(peer)) {
+                return false;
+              }
+            }
+          }
+          break;
+        }
+        case telegram_api::messageActionGiftCode::ID: {
+          auto gift_code = static_cast<const telegram_api::messageActionGiftCode *>(action);
+          if (!is_acceptable_peer(gift_code->boost_peer_)) {
             return false;
           }
           break;
@@ -918,19 +1120,29 @@ bool UpdatesManager::is_acceptable_update(const telegram_api::Update *update) co
     return is_acceptable_message(message);
   }
 
-  if (id == telegram_api::updateDraftMessage::ID) {
-    auto update_draft_message = static_cast<const telegram_api::updateDraftMessage *>(update);
-    CHECK(update_draft_message->draft_ != nullptr);
-    if (update_draft_message->draft_->get_id() == telegram_api::draftMessage::ID) {
-      auto draft_message = static_cast<const telegram_api::draftMessage *>(update_draft_message->draft_.get());
-      return is_acceptable_message_entities(draft_message->entities_);
-    }
-  }
-
   return true;
 }
 
+int32 UpdatesManager::fix_short_message_flags(int32 flags) {
+  static constexpr int32 MESSAGE_FLAG_HAS_REPLY_MARKUP = 1 << 6;
+  static constexpr int32 MESSAGE_FLAG_HAS_MEDIA = 1 << 9;
+  static constexpr int32 MESSAGE_FLAG_HAS_REACTIONS = 1 << 20;
+  static constexpr int32 MESSAGE_FLAG_HAS_REPLY_INFO = 1 << 23;
+  static constexpr int32 MESSAGE_FLAG_HAS_SAVED_PEER_ID = 1 << 28;
+  auto disallowed_flags = MESSAGE_FLAG_HAS_REPLY_MARKUP | MESSAGE_FLAG_HAS_MEDIA | MESSAGE_FLAG_HAS_REACTIONS |
+                          MESSAGE_FLAG_HAS_REPLY_INFO | MESSAGE_FLAG_HAS_SAVED_PEER_ID;
+  if ((flags & disallowed_flags) != 0) {
+    LOG(ERROR) << "Receive short message with flags " << flags;
+    flags = flags & ~disallowed_flags;
+  }
+  return flags;
+}
+
 void UpdatesManager::on_get_updates(tl_object_ptr<telegram_api::Updates> &&updates_ptr, Promise<Unit> &&promise) {
+  send_closure_later(actor_id(this), &UpdatesManager::on_get_updates_impl, std::move(updates_ptr), std::move(promise));
+}
+
+void UpdatesManager::on_get_updates_impl(tl_object_ptr<telegram_api::Updates> updates_ptr, Promise<Unit> promise) {
   CHECK(updates_ptr != nullptr);
   promise = PromiseCreator::lambda(
       [promise = std::move(promise), update_ids = get_update_ids(updates_ptr.get())](Result<Unit> result) mutable {
@@ -977,52 +1189,31 @@ void UpdatesManager::on_get_updates(tl_object_ptr<telegram_api::Updates> &&updat
       break;
     case telegram_api::updateShortMessage::ID: {
       auto update = move_tl_object_as<telegram_api::updateShortMessage>(updates_ptr);
-      if (update->flags_ & MessagesManager::MESSAGE_FLAG_HAS_REPLY_MARKUP) {
-        LOG(ERROR) << "Receive updateShortMessage with reply_markup";
-        update->flags_ ^= MessagesManager::MESSAGE_FLAG_HAS_REPLY_MARKUP;
-      }
-      if (update->flags_ & MessagesManager::MESSAGE_FLAG_HAS_MEDIA) {
-        LOG(ERROR) << "Receive updateShortMessage with media";
-        update->flags_ ^= MessagesManager::MESSAGE_FLAG_HAS_MEDIA;
-      }
-
-      auto from_id = update->out_ ? td_->contacts_manager_->get_my_id().get() : update->user_id_;
-      update->flags_ |= MessagesManager::MESSAGE_FLAG_HAS_FROM_ID;
-
+      auto from_id = update->out_ ? td_->user_manager_->get_my_id().get() : update->user_id_;
       auto message = make_tl_object<telegram_api::message>(
-          update->flags_, false /*ignored*/, false /*ignored*/, false /*ignored*/, false /*ignored*/, false /*ignored*/,
-          false /*ignored*/, false /*ignored*/, false /*ignored*/, false /*ignored*/, false /*ignored*/, update->id_,
-          make_tl_object<telegram_api::peerUser>(from_id), make_tl_object<telegram_api::peerUser>(update->user_id_),
-          std::move(update->fwd_from_), update->via_bot_id_, std::move(update->reply_to_), update->date_,
+          fix_short_message_flags(update->flags_), update->out_, update->mentioned_, update->media_unread_,
+          update->silent_, false, false, false, false, false, false, false, 0, false, update->id_,
+          make_tl_object<telegram_api::peerUser>(from_id), 0, make_tl_object<telegram_api::peerUser>(update->user_id_),
+          nullptr, std::move(update->fwd_from_), update->via_bot_id_, 0, std::move(update->reply_to_), update->date_,
           update->message_, nullptr, nullptr, std::move(update->entities_), 0, 0, nullptr, 0, string(), 0, nullptr,
-          Auto(), update->ttl_period_);
+          Auto(), update->ttl_period_, 0);
       on_pending_update(
           make_tl_object<telegram_api::updateNewMessage>(std::move(message), update->pts_, update->pts_count_), 0,
-          std::move(promise), "telegram_api::updatesShortMessage");
+          std::move(promise), "telegram_api::updateShortMessage");
       break;
     }
     case telegram_api::updateShortChatMessage::ID: {
       auto update = move_tl_object_as<telegram_api::updateShortChatMessage>(updates_ptr);
-      if (update->flags_ & MessagesManager::MESSAGE_FLAG_HAS_REPLY_MARKUP) {
-        LOG(ERROR) << "Receive updateShortChatMessage with reply_markup";
-        update->flags_ ^= MessagesManager::MESSAGE_FLAG_HAS_REPLY_MARKUP;
-      }
-      if (update->flags_ & MessagesManager::MESSAGE_FLAG_HAS_MEDIA) {
-        LOG(ERROR) << "Receive updateShortChatMessage with media";
-        update->flags_ ^= MessagesManager::MESSAGE_FLAG_HAS_MEDIA;
-      }
-
-      update->flags_ |= MessagesManager::MESSAGE_FLAG_HAS_FROM_ID;
       auto message = make_tl_object<telegram_api::message>(
-          update->flags_, false /*ignored*/, false /*ignored*/, false /*ignored*/, false /*ignored*/, false /*ignored*/,
-          false /*ignored*/, false /*ignored*/, false /*ignored*/, false /*ignored*/, false /*ignored*/, update->id_,
-          make_tl_object<telegram_api::peerUser>(update->from_id_),
-          make_tl_object<telegram_api::peerChat>(update->chat_id_), std::move(update->fwd_from_), update->via_bot_id_,
-          std::move(update->reply_to_), update->date_, update->message_, nullptr, nullptr, std::move(update->entities_),
-          0, 0, nullptr, 0, string(), 0, nullptr, Auto(), update->ttl_period_);
+          fix_short_message_flags(update->flags_), update->out_, update->mentioned_, update->media_unread_,
+          update->silent_, false, false, false, false, false, false, false, 0, false, update->id_,
+          make_tl_object<telegram_api::peerUser>(update->from_id_), 0,
+          make_tl_object<telegram_api::peerChat>(update->chat_id_), nullptr, std::move(update->fwd_from_),
+          update->via_bot_id_, 0, std::move(update->reply_to_), update->date_, update->message_, nullptr, nullptr,
+          std::move(update->entities_), 0, 0, nullptr, 0, string(), 0, nullptr, Auto(), update->ttl_period_, 0);
       on_pending_update(
           make_tl_object<telegram_api::updateNewMessage>(std::move(message), update->pts_, update->pts_count_), 0,
-          std::move(promise), "telegram_api::updatesShortChatMessage");
+          std::move(promise), "telegram_api::updateShortChatMessage");
       break;
     }
     case telegram_api::updateShort::ID: {
@@ -1040,8 +1231,8 @@ void UpdatesManager::on_get_updates(tl_object_ptr<telegram_api::Updates> &&updat
     }
     case telegram_api::updatesCombined::ID: {
       auto updates = move_tl_object_as<telegram_api::updatesCombined>(updates_ptr);
-      td_->contacts_manager_->on_get_users(std::move(updates->users_), "updatesCombined");
-      td_->contacts_manager_->on_get_chats(std::move(updates->chats_), "updatesCombined");
+      td_->user_manager_->on_get_users(std::move(updates->users_), "updatesCombined");
+      td_->chat_manager_->on_get_chats(std::move(updates->chats_), "updatesCombined");
       on_pending_updates(std::move(updates->updates_), updates->seq_start_, updates->seq_, updates->date_, Time::now(),
                          std::move(promise), "telegram_api::updatesCombined");
       break;
@@ -1054,8 +1245,8 @@ void UpdatesManager::on_get_updates(tl_object_ptr<telegram_api::Updates> &&updat
         source_str = PSTRING() << "update " << updates->updates_[0]->get_id();
         source = source_str.c_str();
       }
-      td_->contacts_manager_->on_get_users(std::move(updates->users_), source);
-      td_->contacts_manager_->on_get_chats(std::move(updates->chats_), source);
+      td_->user_manager_->on_get_users(std::move(updates->users_), source);
+      td_->chat_manager_->on_get_chats(std::move(updates->chats_), source);
       on_pending_updates(std::move(updates->updates_), updates->seq_, updates->seq_, updates->date_, Time::now(),
                          std::move(promise), "telegram_api::updates");
       break;
@@ -1132,7 +1323,7 @@ void UpdatesManager::on_get_updates_state(tl_object_ptr<telegram_api::updates_st
     process_postponed_pts_updates();  // drop all updates with old PTS
     running_get_difference_ = real_running_get_difference;
     pts_manager_.init(state->pts_);
-    last_get_difference_pts_ = get_pts();
+    last_confirmed_pts_ = get_pts();
     last_pts_save_time_ = Time::now() - 2 * MAX_PTS_SAVE_DELAY;
     save_pts(state->pts_);
   } else {
@@ -1175,31 +1366,23 @@ vector<tl_object_ptr<telegram_api::Update>> *UpdatesManager::get_updates(telegra
       get_updates(static_cast<const telegram_api::Updates *>(updates_ptr)));
 }
 
-vector<UserId> UpdatesManager::extract_group_invite_privacy_forbidden_updates(
-    tl_object_ptr<telegram_api::Updates> &updates_ptr) {
-  auto updates = get_updates(updates_ptr.get());
-  if (updates == nullptr) {
-    LOG(ERROR) << "Can't find updateGroupInvitePrivacyForbidden updates";
-    return {};
+bool UpdatesManager::are_empty_updates(const telegram_api::Updates *updates_ptr) {
+  switch (updates_ptr->get_id()) {
+    case telegram_api::updatesTooLong::ID:
+    case telegram_api::updateShortSentMessage::ID:
+      return true;
+    case telegram_api::updateShortMessage::ID:
+    case telegram_api::updateShortChatMessage::ID:
+    case telegram_api::updateShort::ID:
+      return false;
+    case telegram_api::updatesCombined::ID:
+      return static_cast<const telegram_api::updatesCombined *>(updates_ptr)->updates_.empty();
+    case telegram_api::updates::ID:
+      return static_cast<const telegram_api::updates *>(updates_ptr)->updates_.empty();
+    default:
+      UNREACHABLE();
+      return true;
   }
-  LOG(INFO) << "Extract updateGroupInvitePrivacyForbidden updates from " << updates->size() << " updates";
-  vector<UserId> user_ids;
-  for (auto &update_ptr : *updates) {
-    if (update_ptr->get_id() != telegram_api::updateGroupInvitePrivacyForbidden::ID) {
-      continue;
-    }
-    auto update = telegram_api::move_object_as<telegram_api::updateGroupInvitePrivacyForbidden>(update_ptr);
-    UserId user_id(update->user_id_);
-    if (!user_id.is_valid()) {
-      LOG(ERROR) << "Receive " << to_string(update);
-      continue;
-    }
-    user_ids.push_back(user_id);
-  }
-  if (!user_ids.empty()) {
-    td::remove_if(*updates, [](auto &update) { return update == nullptr; });
-  }
-  return user_ids;
 }
 
 FlatHashSet<int64> UpdatesManager::get_sent_messages_random_ids(const telegram_api::Updates *updates_ptr) {
@@ -1257,7 +1440,7 @@ const telegram_api::Message *UpdatesManager::get_message_by_random_id(const tele
   }
 
   const telegram_api::Message *result = nullptr;
-  FullMessageId full_message_id(dialog_id, MessageId(ServerMessageId(message_id)));
+  MessageFullId message_full_id(dialog_id, MessageId(ServerMessageId(message_id)));
   for (auto &update : *updates) {
     auto constructor_id = update->get_id();
     const tl_object_ptr<telegram_api::Message> *message = nullptr;
@@ -1266,7 +1449,7 @@ const telegram_api::Message *UpdatesManager::get_message_by_random_id(const tele
     } else if (constructor_id == telegram_api::updateNewChannelMessage::ID) {
       message = &static_cast<const telegram_api::updateNewChannelMessage *>(update.get())->message_;
     }
-    if (message != nullptr && FullMessageId::get_full_message_id(*message, false) == full_message_id) {
+    if (message != nullptr && MessageFullId::get_message_full_id(*message, false) == message_full_id) {
       if (result != nullptr) {
         return nullptr;
       }
@@ -1433,18 +1616,21 @@ vector<DialogId> UpdatesManager::get_chat_dialog_ids(const telegram_api::Updates
   vector<DialogId> dialog_ids;
   dialog_ids.reserve(chats->size());
   for (const auto &chat : *chats) {
-    auto dialog_id = ContactsManager::get_dialog_id(chat);
+    auto dialog_id = ChatManager::get_dialog_id(chat);
     if (dialog_id.is_valid()) {
       dialog_ids.push_back(dialog_id);
     } else {
       LOG(ERROR) << "Can't find identifier of " << oneline(to_string(chat));
     }
   }
+  if (dialog_ids.size() > 1) {
+    td::remove(dialog_ids, DialogId(ChatManager::get_unsupported_channel_id()));
+  }
   return dialog_ids;
 }
 
 int32 UpdatesManager::get_update_edit_message_pts(const telegram_api::Updates *updates_ptr,
-                                                  FullMessageId full_message_id) {
+                                                  MessageFullId message_full_id) {
   int32 pts = 0;
   auto updates = get_updates(updates_ptr);
   if (updates != nullptr) {
@@ -1453,24 +1639,24 @@ int32 UpdatesManager::get_update_edit_message_pts(const telegram_api::Updates *u
         switch (update_ptr->get_id()) {
           case telegram_api::updateEditMessage::ID: {
             auto update = static_cast<const telegram_api::updateEditMessage *>(update_ptr.get());
-            if (FullMessageId::get_full_message_id(update->message_, false) == full_message_id) {
+            if (MessageFullId::get_message_full_id(update->message_, false) == message_full_id) {
               return update->pts_;
             }
             return 0;
           }
           case telegram_api::updateEditChannelMessage::ID: {
             auto update = static_cast<const telegram_api::updateEditChannelMessage *>(update_ptr.get());
-            if (FullMessageId::get_full_message_id(update->message_, false) == full_message_id) {
+            if (MessageFullId::get_message_full_id(update->message_, false) == message_full_id) {
               return update->pts_;
             }
             return 0;
           }
           case telegram_api::updateNewScheduledMessage::ID: {
             auto update = static_cast<const telegram_api::updateNewScheduledMessage *>(update_ptr.get());
-            auto new_full_message_id = FullMessageId::get_full_message_id(update->message_, true);
-            if (new_full_message_id.get_dialog_id() == full_message_id.get_dialog_id()) {
-              auto new_message_id = new_full_message_id.get_message_id();
-              auto old_message_id = full_message_id.get_message_id();
+            auto new_message_full_id = MessageFullId::get_message_full_id(update->message_, true);
+            if (new_message_full_id.get_dialog_id() == message_full_id.get_dialog_id()) {
+              auto new_message_id = new_message_full_id.get_message_id();
+              auto old_message_id = message_full_id.get_message_id();
               if (new_message_id.is_valid_scheduled() && new_message_id.is_scheduled_server() &&
                   old_message_id.is_valid_scheduled() && old_message_id.is_scheduled_server() &&
                   old_message_id.get_scheduled_server_message_id() ==
@@ -1497,7 +1683,7 @@ int32 UpdatesManager::get_update_edit_message_pts(const telegram_api::Updates *u
     LOG(ERROR) << "Receive multiple edit message updates in " << to_string(*updates_ptr);
     pts = 0;
   } else if (pts == 0) {
-    LOG(ERROR) << "Receive no edit message updates for " << full_message_id << " in " << to_string(*updates_ptr);
+    LOG(ERROR) << "Receive no edit message updates for " << message_full_id << " in " << to_string(*updates_ptr);
   }
   return pts;
 }
@@ -1507,12 +1693,11 @@ void UpdatesManager::init_state() {
     return;
   }
 
-  bool drop_state = !G()->parameters().use_file_db && !G()->parameters().use_secret_chats &&
-                    td_->auth_manager_->is_bot() &&
+  bool drop_state = get_pts() == -1 && td_->can_ignore_background_updates() && td_->auth_manager_->is_bot() &&
                     td_->option_manager_->get_option_integer("since_last_open") >= 2 * 86400;
 
   auto pmc = G()->td_db()->get_binlog_pmc();
-  if (G()->ignore_background_updates() || drop_state) {
+  if (td_->ignore_background_updates() || drop_state) {
     // just in case
     pmc->erase("updates.pts");
     pmc->erase("updates.qts");
@@ -1538,9 +1723,9 @@ void UpdatesManager::init_state() {
     return;
   }
   pts_manager_.init(to_integer<int32>(pts_str));
-  last_get_difference_pts_ = get_pts();
+  last_confirmed_pts_ = get_pts();
   qts_manager_.init(to_integer<int32>(pmc->get("updates.qts")));
-  last_get_difference_qts_ = get_qts();
+  last_confirmed_qts_ = get_qts();
   date_ = to_integer<int32>(pmc->get("updates.date"));
   date_source_ = "database";
   LOG(DEBUG) << "Init: " << get_pts() << " " << get_qts() << " " << date_;
@@ -1599,6 +1784,16 @@ void UpdatesManager::on_server_pong(tl_object_ptr<telegram_api::updates_state> &
   }
 }
 
+void UpdatesManager::notify_speed_limited(bool is_upload) {
+  if (Time::now() < next_notify_speed_limited_[is_upload]) {
+    return;
+  }
+  next_notify_speed_limited_[is_upload] =
+      Time::now() +
+      static_cast<double>(td_->option_manager_->get_option_integer("upload_premium_speedup_notify_period"));
+  send_closure(G()->td(), &Td::send_update, td_api::make_object<td_api::updateSpeedLimitNotification>(is_upload));
+}
+
 void UpdatesManager::process_get_difference_updates(
     vector<tl_object_ptr<telegram_api::Message>> &&new_messages,
     vector<tl_object_ptr<telegram_api::EncryptedMessage>> &&new_encrypted_messages,
@@ -1614,6 +1809,14 @@ void UpdatesManager::process_get_difference_updates(
       auto update_message_id = move_tl_object_as<telegram_api::updateMessageID>(update);
       td_->messages_manager_->on_update_message_id(update_message_id->random_id_,
                                                    MessageId(ServerMessageId(update_message_id->id_)), "getDifference");
+      CHECK(!running_get_difference_);
+    }
+
+    if (constructor_id == telegram_api::updateStoryID::ID) {
+      LOG(INFO) << "Receive update about sent story " << to_string(update);
+      auto update_story_id = move_tl_object_as<telegram_api::updateStoryID>(update);
+      td_->story_manager_->on_update_story_id(update_story_id->random_id_, StoryId(update_story_id->id_),
+                                              "getDifference");
       CHECK(!running_get_difference_);
     }
 
@@ -1658,7 +1861,7 @@ void UpdatesManager::process_get_difference_updates(
 
   for (auto &message : new_messages) {
     // channel messages must not be received in this vector
-    td_->messages_manager_->on_get_message(std::move(message), true, false, false, true, true, "get difference");
+    td_->messages_manager_->on_get_message(std::move(message), true, false, false, "get difference");
     CHECK(!running_get_difference_);
   }
 
@@ -1671,13 +1874,12 @@ void UpdatesManager::process_get_difference_updates(
 }
 
 void UpdatesManager::on_get_difference(tl_object_ptr<telegram_api::updates_Difference> &&difference_ptr) {
-  VLOG(get_difference) << "----- END  GET DIFFERENCE-----";
-  running_get_difference_ = false;
-
-  if (!td_->auth_manager_->is_authorized()) {
-    // just in case
+  if (G()->close_flag() || !td_->auth_manager_->is_authorized()) {
     return;
   }
+
+  VLOG(get_difference) << "----- END  GET DIFFERENCE-----";
+  running_get_difference_ = false;
 
   LOG(DEBUG) << "Result of get difference: " << to_string(difference_ptr);
 
@@ -1706,7 +1908,7 @@ void UpdatesManager::on_get_difference(tl_object_ptr<telegram_api::updates_Diffe
         pending_seq_updates_.clear();
 
         for (auto &pending_update : pending_seq_updates) {
-          pending_update.second.promise.set_value(Unit());
+          pending_update.promise.set_value(Unit());
         }
       }
       break;
@@ -1715,8 +1917,19 @@ void UpdatesManager::on_get_difference(tl_object_ptr<telegram_api::updates_Diffe
       auto difference = move_tl_object_as<telegram_api::updates_difference>(difference_ptr);
       VLOG(get_difference) << "In get difference receive " << difference->users_.size() << " users and "
                            << difference->chats_.size() << " chats";
-      td_->contacts_manager_->on_get_users(std::move(difference->users_), "updates.difference");
-      td_->contacts_manager_->on_get_chats(std::move(difference->chats_), "updates.difference");
+      td_->user_manager_->on_get_users(std::move(difference->users_), "updates.difference");
+      td_->chat_manager_->on_get_chats(std::move(difference->chats_), "updates.difference");
+
+      if (get_difference_retry_count_ <= 5) {
+        for (const auto &message : difference->new_messages_) {
+          if (MessagesManager::is_invalid_poll_message(message.get())) {
+            get_difference_retry_count_++;
+            LOG(ERROR) << "Receive invalid poll message in updates.difference after " << get_difference_retry_count_
+                       << " tries";
+            return run_get_difference(true, "reget difference");
+          }
+        }
+      }
 
       process_get_difference_updates(std::move(difference->new_messages_),
                                      std::move(difference->new_encrypted_messages_),
@@ -1740,8 +1953,19 @@ void UpdatesManager::on_get_difference(tl_object_ptr<telegram_api::updates_Diffe
 
       VLOG(get_difference) << "In get difference receive " << difference->users_.size() << " users and "
                            << difference->chats_.size() << " chats";
-      td_->contacts_manager_->on_get_users(std::move(difference->users_), "updates.differenceSlice");
-      td_->contacts_manager_->on_get_chats(std::move(difference->chats_), "updates.differenceSlice");
+      td_->user_manager_->on_get_users(std::move(difference->users_), "updates.differenceSlice");
+      td_->chat_manager_->on_get_chats(std::move(difference->chats_), "updates.differenceSlice");
+
+      if (get_difference_retry_count_ <= 5) {
+        for (const auto &message : difference->new_messages_) {
+          if (MessagesManager::is_invalid_poll_message(message.get())) {
+            get_difference_retry_count_++;
+            LOG(ERROR) << "Receive invalid poll message in updates.differenceSlice after "
+                       << get_difference_retry_count_ << " tries";
+            return run_get_difference(true, "reget difference");
+          }
+        }
+      }
 
       process_get_difference_updates(std::move(difference->new_messages_),
                                      std::move(difference->new_encrypted_messages_),
@@ -1791,9 +2015,104 @@ void UpdatesManager::on_get_difference(tl_object_ptr<telegram_api::updates_Diffe
       UNREACHABLE();
   }
 
+  get_difference_retry_count_ = 0;
+
   if (!running_get_difference_) {
     after_get_difference();
   }
+}
+
+void UpdatesManager::on_get_pts_update(int32 pts,
+                                       telegram_api::object_ptr<telegram_api::updates_Difference> difference_ptr) {
+  if (G()->close_flag() || !td_->auth_manager_->is_authorized()) {
+    return;
+  }
+  LOG(DEBUG) << "Receive update with PTS " << pts << ": " << to_string(difference_ptr);
+  if (get_pts() != pts - 1 || running_get_difference_ || !postponed_pts_updates_.empty() ||
+      pending_pts_updates_.empty() || pending_pts_updates_.begin()->pts > pts + 1 ||
+      pending_pts_updates_.begin()->pts != pts + pending_pts_updates_.begin()->pts_count) {
+    return;
+  }
+
+  switch (difference_ptr->get_id()) {
+    case telegram_api::updates_difference::ID: {
+      auto difference = move_tl_object_as<telegram_api::updates_difference>(difference_ptr);
+      difference_ptr = telegram_api::make_object<telegram_api::updates_differenceSlice>(
+          std::move(difference->new_messages_), std::move(difference->new_encrypted_messages_),
+          std::move(difference->other_updates_), std::move(difference->chats_), std::move(difference->users_),
+          std::move(difference->state_));
+    }
+    // fallthrough
+    case telegram_api::updates_differenceSlice::ID: {
+      auto difference = move_tl_object_as<telegram_api::updates_differenceSlice>(difference_ptr);
+
+      if (have_update_pts_changed(difference->other_updates_)) {
+        return;
+      }
+
+      td_->user_manager_->on_get_users(std::move(difference->users_), "on_get_pts_update");
+      td_->chat_manager_->on_get_chats(std::move(difference->chats_), "on_get_pts_update");
+
+      for (auto &message : difference->new_messages_) {
+        difference->other_updates_.push_back(
+            telegram_api::make_object<telegram_api::updateNewMessage>(std::move(message), pts, 1));
+      }
+      telegram_api::object_ptr<telegram_api::Update> *update_ptr = nullptr;
+      size_t update_count = 0;
+      for (auto &update : difference->other_updates_) {
+        auto constructor_id = update->get_id();
+        if (constructor_id == telegram_api::updateMessageID::ID) {
+          // in getDifference updateMessageID can't be received for scheduled messages
+          LOG(INFO) << "Receive update about sent message " << to_string(update);
+          auto update_message_id = move_tl_object_as<telegram_api::updateMessageID>(update);
+          td_->messages_manager_->on_update_message_id(
+              update_message_id->random_id_, MessageId(ServerMessageId(update_message_id->id_)), "on_get_pts_update");
+          continue;
+        }
+        if (constructor_id == telegram_api::updateDeleteMessages::ID) {
+          auto *update_delete_messages = static_cast<const telegram_api::updateDeleteMessages *>(update.get());
+          if (update_delete_messages->pts_count_ != 0 || update_delete_messages->messages_.size() != 1) {
+            LOG(ERROR) << "Receive in getDifference " << to_string(update);
+          }
+        }
+
+        update_ptr = &update;
+        update_count++;
+      }
+
+      if (!difference->new_encrypted_messages_.empty() || update_count != 1) {
+        LOG(ERROR) << "Receive unexpected updates with PTS " << pts << ": " << to_string(difference);
+        break;
+      }
+
+      CHECK(update_ptr != nullptr);
+      VLOG(get_difference) << "Repair update with PTS " << pts;
+      pts_fixed_short_gap_++;
+      add_pending_pts_update(std::move(*update_ptr), pts, 1, Time::now(), Promise<Unit>(), "on_get_pts_update");
+      break;
+    }
+    case telegram_api::updates_differenceEmpty::ID:
+    case telegram_api::updates_differenceTooLong::ID: {
+      LOG(ERROR) << "Receive " << oneline(to_string(difference_ptr)) << " for request with PTS = " << pts - 1
+                 << ", but have pending " << oneline(to_string(pending_pts_updates_.begin()->update))
+                 << " with PTS = " << pending_pts_updates_.begin()->pts;
+      break;
+      default:
+        UNREACHABLE();
+    }
+  }
+}
+
+void UpdatesManager::confirm_pts_qts(int32 qts) {
+  int32 pts = get_pts();
+  if (pts < 0) {
+    pts = 0;
+  }
+
+  td_->create_handler<ConfirmPtsQtsQuery>()->send(pts, qts);
+
+  last_confirmed_pts_ = pts;
+  last_confirmed_qts_ = qts;
 }
 
 void UpdatesManager::after_get_difference() {
@@ -1802,7 +2121,7 @@ void UpdatesManager::after_get_difference() {
   retry_timeout_.cancel_timeout();
   retry_time_ = 1;
 
-  finished_first_get_difference_ = true;
+  skipped_postponed_updates_after_start_ = 0;
   td_->option_manager_->set_option_empty("since_last_open");
 
   // cancels qts_gap_timeout_ if needed, can apply some updates received during getDifference,
@@ -1824,12 +2143,12 @@ void UpdatesManager::after_get_difference() {
     size_t total_update_count = 0;
     while (!postponed_updates_.empty()) {
       auto it = postponed_updates_.begin();
-      auto updates = std::move(it->second.updates);
-      auto updates_seq_begin = it->second.seq_begin;
-      auto updates_seq_end = it->second.seq_end;
-      auto receive_time = it->second.receive_time;
-      auto promise = std::move(it->second.promise);
-      // ignore it->second.date, because it may be too old
+      auto updates = std::move(it->updates);
+      auto updates_seq_begin = it->seq_begin;
+      auto updates_seq_end = it->seq_end;
+      auto receive_time = it->receive_time;
+      auto promise = std::move(it->promise);
+      // ignore it->date, because it may be too old
       postponed_updates_.erase(it);
       auto update_count = updates.size();
       on_pending_updates(std::move(updates), updates_seq_begin, updates_seq_end, 0, receive_time, std::move(promise),
@@ -1856,10 +2175,11 @@ void UpdatesManager::after_get_difference() {
 
     auto begin_time = Time::now();
     auto update_count = postponed_updates.size();
+    auto old_pts = get_pts();
     VLOG(get_difference) << "Begin to apply " << postponed_updates.size()
                          << " postponed PTS updates with PTS = " << get_pts();
     for (auto &postponed_update : postponed_updates) {
-      auto &update = postponed_update.second;
+      auto &update = postponed_update;
       add_pending_pts_update(std::move(update.update), update.pts, update.pts_count, update.receive_time,
                              std::move(update.promise), AFTER_GET_DIFFERENCE_SOURCE);
       CHECK(!running_get_difference_);
@@ -1869,8 +2189,9 @@ void UpdatesManager::after_get_difference() {
                          << postponed_pts_updates_.size() << " pending PTS updates";
     auto passed_time = Time::now() - begin_time;
     if (passed_time >= UPDATE_APPLY_WARNING_TIME) {
-      LOG(WARNING) << "Applied " << update_count << " PTS updates in " << passed_time
-                   << " seconds after postponing them for " << (Time::now() - get_difference_start_time_) << " seconds";
+      LOG(WARNING) << "Updated PTS from " << old_pts << " to " << get_pts() << " and applied " << update_count
+                   << " PTS updates in " << passed_time << " seconds after postponing them for "
+                   << (Time::now() - get_difference_start_time_) << " seconds";
     }
   }
 
@@ -1925,9 +2246,11 @@ void UpdatesManager::try_reload_data() {
   LOG(INFO) << "Reload data";
   td_->animations_manager_->reload_saved_animations(true);
   td_->autosave_manager_->reload_autosave_settings();
-  td_->contacts_manager_->reload_created_public_dialogs(PublicDialogType::HasUsername, std::move(promise));
-  td_->contacts_manager_->reload_created_public_dialogs(PublicDialogType::IsLocationBased, Auto());
+  td_->chat_manager_->reload_created_public_dialogs(PublicDialogType::HasUsername, std::move(promise));
+  td_->chat_manager_->reload_created_public_dialogs(PublicDialogType::IsLocationBased, Auto());
+  td_->chat_manager_->reload_created_public_dialogs(PublicDialogType::ForPersonalDialog, Auto());
   get_default_emoji_statuses(td_, Auto());
+  get_default_channel_emoji_statuses(td_, Auto());
   td_->notification_settings_manager_->reload_saved_ringtones(Auto());
   td_->notification_settings_manager_->send_get_scope_notification_settings_query(NotificationSettingsScope::Private,
                                                                                   Auto());
@@ -1935,9 +2258,14 @@ void UpdatesManager::try_reload_data() {
                                                                                   Auto());
   td_->notification_settings_manager_->send_get_scope_notification_settings_query(NotificationSettingsScope::Channel,
                                                                                   Auto());
-  td_->stickers_manager_->reload_reactions();
-  td_->stickers_manager_->reload_recent_reactions();
-  td_->stickers_manager_->reload_top_reactions();
+  td_->quick_reply_manager_->reload_quick_reply_shortcuts();
+  td_->reaction_manager_->reload_reactions();
+
+  for (int32 type = 0; type < MAX_REACTION_LIST_TYPE; type++) {
+    auto reaction_list_type = static_cast<ReactionListType>(type);
+    td_->reaction_manager_->reload_reaction_list(reaction_list_type, "try_reload_data");
+  }
+
   for (int32 type = 0; type < MAX_STICKER_TYPE; type++) {
     auto sticker_type = static_cast<StickerType>(type);
     td_->stickers_manager_->get_installed_sticker_sets(sticker_type, Auto());
@@ -1951,9 +2279,19 @@ void UpdatesManager::try_reload_data() {
   td_->stickers_manager_->reload_special_sticker_set_by_type(SpecialStickerSetType::premium_gifts());
   td_->stickers_manager_->reload_special_sticker_set_by_type(SpecialStickerSetType::generic_animations());
   td_->stickers_manager_->reload_special_sticker_set_by_type(SpecialStickerSetType::default_statuses());
+  td_->stickers_manager_->reload_special_sticker_set_by_type(SpecialStickerSetType::default_channel_statuses());
   td_->stickers_manager_->reload_special_sticker_set_by_type(SpecialStickerSetType::default_topic_icons());
-  td_->stickers_manager_->get_default_dialog_photo_custom_emoji_stickers(false, true, Auto());
-  td_->stickers_manager_->get_default_dialog_photo_custom_emoji_stickers(true, true, Auto());
+  td_->stickers_manager_->get_default_custom_emoji_stickers(StickerListType::DialogPhoto, true, Auto());
+  td_->stickers_manager_->get_default_custom_emoji_stickers(StickerListType::UserProfilePhoto, true, Auto());
+  td_->stickers_manager_->get_default_custom_emoji_stickers(StickerListType::Background, true, Auto());
+  td_->stickers_manager_->get_sticker_list_emoji_statuses(StickerListType::DisallowedChannelEmojiStatus, true, Auto());
+  td_->story_manager_->reload_active_stories();
+  td_->story_manager_->reload_all_read_stories();
+  td_->theme_manager_->reload_accent_colors();
+  td_->theme_manager_->reload_chat_themes();
+  td_->theme_manager_->reload_profile_accent_colors();
+  td_->time_zone_manager_->reload_time_zones(Auto());
+  td_->user_manager_->reload_contact_birthdates(false);
 
   schedule_data_reload();
 }
@@ -1966,32 +2304,6 @@ void UpdatesManager::on_data_reloaded() {
   next_data_reload_time_ = Time::now() + Random::fast(3000, 4200);
   data_reload_timeout_.cancel_timeout();
   schedule_data_reload();
-}
-
-void UpdatesManager::subscribe_to_transcribed_audio_updates(int64 transcription_id, TranscribedAudioHandler on_update) {
-  CHECK(transcription_id != 0);
-  if (pending_audio_transcriptions_.count(transcription_id) != 0) {
-    on_pending_audio_transcription_failed(transcription_id,
-                                          Status::Error(500, "Receive duplicate speech recognition identifier"));
-  }
-  bool is_inserted = pending_audio_transcriptions_.emplace(transcription_id, std::move(on_update)).second;
-  CHECK(is_inserted);
-  pending_audio_transcription_timeout_.set_timeout_in(transcription_id, AUDIO_TRANSCRIPTION_TIMEOUT);
-}
-
-void UpdatesManager::on_pending_audio_transcription_failed(int64 transcription_id, Status &&error) {
-  if (G()->close_flag()) {
-    return;
-  }
-  auto it = pending_audio_transcriptions_.find(transcription_id);
-  if (it == pending_audio_transcriptions_.end()) {
-    return;
-  }
-  auto on_update = std::move(it->second);
-  pending_audio_transcriptions_.erase(it);
-  pending_audio_transcription_timeout_.cancel_timeout(transcription_id);
-
-  on_update(std::move(error));
 }
 
 void UpdatesManager::on_pending_updates(vector<tl_object_ptr<telegram_api::Update>> &&updates, int32 seq_begin,
@@ -2068,7 +2380,7 @@ void UpdatesManager::on_pending_updates(vector<tl_object_ptr<telegram_api::Updat
           auto dialog_id = DialogId::get_message_dialog_id(*message_ptr);
           if (dialog_id.get_type() == DialogType::Channel) {
             auto channel_id = dialog_id.get_channel_id();
-            if (td_->contacts_manager_->have_channel_force(channel_id)) {
+            if (td_->chat_manager_->have_channel_force(channel_id, source)) {
               if (td_->messages_manager_->is_old_channel_update(dialog_id, pts)) {
                 // the update will be ignored anyway, so there is no reason to replace it or force get_difference
                 LOG(INFO) << "Allow an outdated unacceptable update from " << source;
@@ -2100,7 +2412,7 @@ void UpdatesManager::on_pending_updates(vector<tl_object_ptr<telegram_api::Updat
     if (dialog_id.get_type() == DialogType::User) {
       auto user_id = dialog_id.get_user_id();
       if (user_id.is_valid()) {
-        td_->contacts_manager_->on_update_user_local_was_online(user_id, date);
+        td_->user_manager_->on_update_user_local_was_online(user_id, date);
       }
     }
   }
@@ -2167,7 +2479,6 @@ void UpdatesManager::on_pending_updates(vector<tl_object_ptr<telegram_api::Updat
       LOG(INFO) << "Receive from " << source << " pending " << to_string(update);
       int32 id = update->get_id();
       if (id == telegram_api::updateMessageID::ID) {
-        LOG(INFO) << "Receive from " << source << " " << to_string(update);
         auto sent_message_update = move_tl_object_as<telegram_api::updateMessageID>(update);
         MessageId message_id;
         if (ordinary_new_message_count != 0) {
@@ -2180,6 +2491,11 @@ void UpdatesManager::on_pending_updates(vector<tl_object_ptr<telegram_api::Updat
             LOG(ERROR) << "Update: " << oneline(to_string(debug_update));
           }
         }
+        update = nullptr;
+      }
+      if (id == telegram_api::updateStoryID::ID) {
+        auto update_story_id = move_tl_object_as<telegram_api::updateStoryID>(update);
+        td_->story_manager_->on_update_story_id(update_story_id->random_id_, StoryId(update_story_id->id_), source);
         update = nullptr;
       }
       if (id == telegram_api::updateFolderPeers::ID) {
@@ -2248,8 +2564,7 @@ void UpdatesManager::on_pending_updates(vector<tl_object_ptr<telegram_api::Updat
       LOG(ERROR) << "Run get difference while applying updates from " << source;
     }
     if (can_postpone) {
-      postponed_updates_.emplace(
-          seq_begin, PendingSeqUpdates(seq_begin, seq_end, date, receive_time, std::move(updates), std::move(lock)));
+      postponed_updates_.emplace(seq_begin, seq_end, date, receive_time, std::move(updates), std::move(lock));
     } else {
       lock.set_value(Unit());
     }
@@ -2280,12 +2595,9 @@ void UpdatesManager::on_pending_updates(vector<tl_object_ptr<telegram_api::Updat
 
   LOG(INFO) << "Gap in seq has found. Receive " << updates.size() << " updates [" << seq_begin << ", " << seq_end
             << "] from " << source << ", but seq = " << seq_;
-  LOG_IF(WARNING, pending_seq_updates_.count(seq_begin) > 0)
-      << "Already have pending updates with seq = " << seq_begin << ", but receive it again from " << source;
 
   if (can_postpone_updates()) {
-    pending_seq_updates_.emplace(
-        seq_begin, PendingSeqUpdates(seq_begin, seq_end, date, receive_time, std::move(updates), std::move(lock)));
+    pending_seq_updates_.emplace(seq_begin, seq_end, date, receive_time, std::move(updates), std::move(lock));
   } else {
     lock.set_value(Unit());
   }
@@ -2310,13 +2622,13 @@ void UpdatesManager::add_pending_qts_update(tl_object_ptr<telegram_api::Update> 
 
   int32 old_qts = get_qts();
   LOG(INFO) << "Process update with QTS = " << qts << ", current QTS = " << old_qts;
-  if (qts < old_qts - 100001) {
+  if (qts < old_qts - 1000009) {
     LOG(WARNING) << "Restore QTS after QTS overflow from " << old_qts << " to " << qts << " by "
                  << oneline(to_string(update));
     add_qts(qts - 1).set_value(Unit());
     CHECK(get_qts() == qts - 1);
     old_qts = qts - 1;
-    last_get_difference_qts_ = get_qts();
+    last_confirmed_qts_ = get_qts();
   }
 
   if (qts <= old_qts) {
@@ -2491,7 +2803,7 @@ void UpdatesManager::add_pending_pts_update(tl_object_ptr<telegram_api::Update> 
   // do not try to run getDifference from this function
   CHECK(update != nullptr);
   CHECK(source != nullptr);
-  LOG(INFO) << "Receive from " << source << " pending " << to_string(update);
+  LOG(INFO) << "Receive from " << source << " with pts_count = " << pts_count << " pending " << to_string(update);
   if (pts_count < 0 || new_pts <= pts_count) {
     LOG(ERROR) << "Receive update with wrong PTS = " << new_pts << " or pts_count = " << pts_count << " from " << source
                << ": " << oneline(to_string(update));
@@ -2506,7 +2818,7 @@ void UpdatesManager::add_pending_pts_update(tl_object_ptr<telegram_api::Update> 
     return promise.set_value(Unit());
   }
 
-  if (DROP_PTS_UPDATES) {
+  if (DROP_PTS_UPDATES && Slice(source) != Slice("on_get_pts_update")) {
     set_pts_gap_timeout(1.0);
     return promise.set_value(Unit());
   }
@@ -2515,8 +2827,14 @@ void UpdatesManager::add_pending_pts_update(tl_object_ptr<telegram_api::Update> 
   if (new_pts < old_pts - 99 && source != AFTER_GET_DIFFERENCE_SOURCE) {
     bool need_restore_pts = new_pts < old_pts - 19999;
     auto now = Time::now();
-    if (now > last_pts_jump_warning_time_ + 1 && (need_restore_pts || now < last_pts_jump_warning_time_ + 5) &&
-        !(old_pts == std::numeric_limits<int32>::max() && running_get_difference_)) {
+    if (old_pts == 2100000000 && new_pts < 1100000000 && pts_count <= 10000 &&
+        td_->option_manager_->get_option_integer("session_count") > 1) {
+      set_pts(1, "restore PTS").set_value(Unit());
+      old_pts = get_pts();
+      set_pts_gap_timeout(0.001);
+      return promise.set_value(Unit());
+    } else if (now > last_pts_jump_warning_time_ + 1 && need_restore_pts &&
+               !(old_pts == std::numeric_limits<int32>::max() && running_get_difference_)) {
       LOG(ERROR) << "Restore PTS after delete_first_messages from " << old_pts << " to " << new_pts
                  << " is disabled, pts_count = " << pts_count << ", update is from " << source << ": "
                  << oneline(to_string(update));
@@ -2524,13 +2842,6 @@ void UpdatesManager::add_pending_pts_update(tl_object_ptr<telegram_api::Update> 
     }
     if (need_restore_pts) {
       set_pts_gap_timeout(0.001);
-
-      /*
-      LOG(WARNING) << "Restore PTS after delete_first_messages";
-      set_pts(new_pts - 1, "restore PTS after delete_first_messages");
-      old_pts = get_pts();
-      CHECK(old_pts == new_pts - 1);
-      */
     }
   }
 
@@ -2593,20 +2904,24 @@ void UpdatesManager::add_pending_pts_update(tl_object_ptr<telegram_api::Update> 
           .set_value(Unit());  // TODO can't set until data are really stored on persistent storage
       accumulated_pts_count_ = 0;
       accumulated_pts_ = -1;
+    } else {
+      LOG(DEBUG) << "There is no need to process the update";
     }
     promise.set_value(Unit());
     return;
   }
 
-  pending_pts_updates_.emplace(
-      new_pts, PendingPtsUpdate(std::move(update), new_pts, pts_count, receive_time, std::move(promise)));
+  pending_pts_updates_.emplace(std::move(update), new_pts, pts_count, receive_time, std::move(promise));
 
   if (old_pts < accumulated_pts_ - accumulated_pts_count_) {
     if (old_pts == new_pts - pts_count) {
       // can't apply all updates, but can apply this and probably some other updates
       process_pending_pts_updates();
     } else {
-      set_pts_gap_timeout(receive_time + MAX_UNFILLED_GAP_TIME - Time::now());
+      LOG(DEBUG) << "Can't process PTS updates, because current PTS = " << old_pts << ", new PTS = " << new_pts
+                 << ", pts_count = " << pts_count << ", maximum known PTS = " << accumulated_pts_
+                 << ", accumulated_pts_count = " << accumulated_pts_count_;
+      set_pts_gap_timeout(max(receive_time + MAX_UNFILLED_GAP_TIME - Time::now(), 0.001));
     }
     return;
   }
@@ -2617,11 +2932,10 @@ void UpdatesManager::add_pending_pts_update(tl_object_ptr<telegram_api::Update> 
 
 void UpdatesManager::postpone_pts_update(tl_object_ptr<telegram_api::Update> &&update, int32 pts, int32 pts_count,
                                          double receive_time, Promise<Unit> &&promise) {
-  if (!can_postpone_updates()) {
+  if (!can_postpone_updates() || (pts_count > 1 && td_->option_manager_->get_option_integer("session_count") <= 1)) {
     return promise.set_value(Unit());
   }
-  postponed_pts_updates_.emplace(pts,
-                                 PendingPtsUpdate(std::move(update), pts, pts_count, receive_time, std::move(promise)));
+  postponed_pts_updates_.emplace(std::move(update), pts, pts_count, receive_time, std::move(promise));
 }
 
 void UpdatesManager::process_seq_updates(int32 seq_end, int32 date,
@@ -2649,61 +2963,148 @@ void UpdatesManager::process_seq_updates(int32 seq_end, int32 date,
 void UpdatesManager::process_qts_update(tl_object_ptr<telegram_api::Update> &&update_ptr, int32 qts,
                                         Promise<Unit> &&promise) {
   LOG(DEBUG) << "Process " << to_string(update_ptr);
-  if (last_get_difference_qts_ < qts - FORCED_GET_DIFFERENCE_PTS_DIFF) {
-    if (last_get_difference_qts_ != 0) {
-      schedule_get_difference("rare QTS getDifference");
-    }
-    last_get_difference_qts_ = qts;
+  if (last_confirmed_qts_ < qts - FORCED_GET_DIFFERENCE_PTS_DIFF && last_confirmed_qts_ != 0) {
+    confirm_pts_qts(qts);
   }
-  switch (update_ptr->get_id()) {
-    case telegram_api::updateNewEncryptedMessage::ID: {
-      auto update = move_tl_object_as<telegram_api::updateNewEncryptedMessage>(update_ptr);
-      send_closure(td_->secret_chats_manager_, &SecretChatsManager::on_new_message, std::move(update->message_),
-                   add_qts(qts));
-      break;
+  qts_diff_++;
+  if (qts_diff_ >= 1000000) {
+    LOG(WARNING) << "Fixed " << qts_gap_ << " QTS gaps";
+    qts_gap_ = 0;
+    qts_diff_ = 0;
+  }
+  auto constructor_id = update_ptr->get_id();
+  if (constructor_id == telegram_api::updateNewEncryptedMessage::ID) {
+    auto update = move_tl_object_as<telegram_api::updateNewEncryptedMessage>(update_ptr);
+    send_closure(td_->secret_chats_manager_, &SecretChatsManager::on_new_message, std::move(update->message_),
+                 add_qts(qts));
+  } else if (td_->auth_manager_->is_bot()) {
+    switch (constructor_id) {
+      case telegram_api::updateMessagePollVote::ID: {
+        auto update = move_tl_object_as<telegram_api::updateMessagePollVote>(update_ptr);
+        td_->poll_manager_->on_get_poll_vote(PollId(update->poll_id_), DialogId(update->peer_),
+                                             std::move(update->options_));
+        break;
+      }
+      case telegram_api::updateBotStopped::ID: {
+        auto update = move_tl_object_as<telegram_api::updateBotStopped>(update_ptr);
+        td_->dialog_participant_manager_->on_update_bot_stopped(UserId(update->user_id_), update->date_,
+                                                                update->stopped_);
+        break;
+      }
+      case telegram_api::updateChatParticipant::ID: {
+        auto update = move_tl_object_as<telegram_api::updateChatParticipant>(update_ptr);
+        td_->dialog_participant_manager_->on_update_chat_participant(
+            ChatId(update->chat_id_), UserId(update->actor_id_), update->date_,
+            DialogInviteLink(std::move(update->invite_), true, "updateChatParticipant"),
+            std::move(update->prev_participant_), std::move(update->new_participant_));
+        break;
+      }
+      case telegram_api::updateChannelParticipant::ID: {
+        auto update = move_tl_object_as<telegram_api::updateChannelParticipant>(update_ptr);
+        td_->dialog_participant_manager_->on_update_channel_participant(
+            ChannelId(update->channel_id_), UserId(update->actor_id_), update->date_,
+            DialogInviteLink(std::move(update->invite_), true, "updateChannelParticipant"), update->via_chatlist_,
+            std::move(update->prev_participant_), std::move(update->new_participant_));
+        break;
+      }
+      case telegram_api::updateBotChatInviteRequester::ID: {
+        auto update = move_tl_object_as<telegram_api::updateBotChatInviteRequester>(update_ptr);
+        td_->dialog_participant_manager_->on_update_chat_invite_requester(
+            DialogId(update->peer_), UserId(update->user_id_), std::move(update->about_), update->date_,
+            DialogInviteLink(std::move(update->invite_), true, "updateBotChatInviteRequester"));
+        break;
+      }
+      case telegram_api::updateBotChatBoost::ID: {
+        auto update = move_tl_object_as<telegram_api::updateBotChatBoost>(update_ptr);
+        td_->boost_manager_->on_update_dialog_boost(DialogId(update->peer_), std::move(update->boost_));
+        break;
+      }
+      case telegram_api::updateBotMessageReaction::ID: {
+        auto update = move_tl_object_as<telegram_api::updateBotMessageReaction>(update_ptr);
+        auto dialog_id = DialogId(update->peer_);
+        auto message_id = MessageId(ServerMessageId(update->msg_id_));
+        auto date = update->date_;
+        auto actor_dialog_id = DialogId(update->actor_);
+        auto old_reaction_types = ReactionType::get_reaction_types(update->old_reactions_);
+        auto new_reaction_types = ReactionType::get_reaction_types(update->new_reactions_);
+        if (!dialog_id.is_valid() || !message_id.is_valid() || !actor_dialog_id.is_valid() || date <= 0 ||
+            old_reaction_types == new_reaction_types) {
+          LOG(ERROR) << "Receive invalid updateBotMessageReaction for " << MessageFullId{dialog_id, message_id}
+                     << " by " << actor_dialog_id << " at " << date << ": " << old_reaction_types << " -> "
+                     << new_reaction_types;
+          break;
+        }
+
+        td_->dialog_manager_->force_create_dialog(dialog_id, "on_update_bot_message_reaction", true);
+        send_closure(G()->td(), &Td::send_update,
+                     td_api::make_object<td_api::updateMessageReaction>(
+                         td_->dialog_manager_->get_chat_id_object(dialog_id, "updateMessageReaction"), message_id.get(),
+                         get_message_sender_object(td_, actor_dialog_id, "updateMessageReaction"), date,
+                         ReactionType::get_reaction_types_object(old_reaction_types),
+                         ReactionType::get_reaction_types_object(new_reaction_types)));
+        break;
+      }
+      case telegram_api::updateBotMessageReactions::ID: {
+        auto update = move_tl_object_as<telegram_api::updateBotMessageReactions>(update_ptr);
+        auto dialog_id = DialogId(update->peer_);
+        auto message_id = MessageId(ServerMessageId(update->msg_id_));
+        auto date = update->date_;
+        if (!dialog_id.is_valid() || !message_id.is_valid() || date <= 0) {
+          LOG(ERROR) << "Receive invalid " << to_string(update->reactions_);
+          return;
+        }
+        vector<td_api::object_ptr<td_api::messageReaction>> message_reactions;
+        for (const auto &reaction_count : update->reactions_) {
+          auto reaction_type = ReactionType(reaction_count->reaction_);
+          if (reaction_type.is_empty() || reaction_count->count_ <= 0) {
+            LOG(ERROR) << "Receive invalid reaction in updateBotMessageReactions for "
+                       << MessageFullId{dialog_id, message_id} << " at " << date << ": " << to_string(reaction_count);
+            continue;
+          }
+          message_reactions.push_back(td_api::make_object<td_api::messageReaction>(
+              reaction_type.get_reaction_type_object(), reaction_count->count_, false, nullptr, Auto()));
+        }
+        td_->dialog_manager_->force_create_dialog(dialog_id, "on_update_bot_message_reactions", true);
+        send_closure(G()->td(), &Td::send_update,
+                     td_api::make_object<td_api::updateMessageReactions>(
+                         td_->dialog_manager_->get_chat_id_object(dialog_id, "updateMessageReactions"),
+                         message_id.get(), date, std::move(message_reactions)));
+        break;
+      }
+      case telegram_api::updateBotBusinessConnect::ID: {
+        auto update = move_tl_object_as<telegram_api::updateBotBusinessConnect>(update_ptr);
+        td_->business_connection_manager_->on_update_bot_business_connect(std::move(update->connection_));
+        break;
+      }
+      case telegram_api::updateBotNewBusinessMessage::ID: {
+        auto update = move_tl_object_as<telegram_api::updateBotNewBusinessMessage>(update_ptr);
+        td_->business_connection_manager_->on_update_bot_new_business_message(
+            BusinessConnectionId(std::move(update->connection_id_)), std::move(update->message_),
+            std::move(update->reply_to_message_));
+        break;
+      }
+      case telegram_api::updateBotEditBusinessMessage::ID: {
+        auto update = move_tl_object_as<telegram_api::updateBotEditBusinessMessage>(update_ptr);
+        td_->business_connection_manager_->on_update_bot_edit_business_message(
+            BusinessConnectionId(std::move(update->connection_id_)), std::move(update->message_),
+            std::move(update->reply_to_message_));
+        break;
+      }
+      case telegram_api::updateBotDeleteBusinessMessage::ID: {
+        auto update = move_tl_object_as<telegram_api::updateBotDeleteBusinessMessage>(update_ptr);
+        td_->business_connection_manager_->on_update_bot_delete_business_messages(
+            BusinessConnectionId(std::move(update->connection_id_)), DialogId(update->peer_),
+            std::move(update->messages_));
+        break;
+      }
+      default:
+        UNREACHABLE();
+        break;
     }
-    case telegram_api::updateMessagePollVote::ID: {
-      auto update = move_tl_object_as<telegram_api::updateMessagePollVote>(update_ptr);
-      td_->poll_manager_->on_get_poll_vote(PollId(update->poll_id_), UserId(update->user_id_),
-                                           std::move(update->options_));
-      add_qts(qts).set_value(Unit());
-      break;
-    }
-    case telegram_api::updateBotStopped::ID: {
-      auto update = move_tl_object_as<telegram_api::updateBotStopped>(update_ptr);
-      td_->contacts_manager_->on_update_bot_stopped(UserId(update->user_id_), update->date_, update->stopped_);
-      add_qts(qts).set_value(Unit());
-      break;
-    }
-    case telegram_api::updateChatParticipant::ID: {
-      auto update = move_tl_object_as<telegram_api::updateChatParticipant>(update_ptr);
-      td_->contacts_manager_->on_update_chat_participant(
-          ChatId(update->chat_id_), UserId(update->actor_id_), update->date_,
-          DialogInviteLink(std::move(update->invite_), true, "updateChatParticipant"),
-          std::move(update->prev_participant_), std::move(update->new_participant_));
-      add_qts(qts).set_value(Unit());
-      break;
-    }
-    case telegram_api::updateChannelParticipant::ID: {
-      auto update = move_tl_object_as<telegram_api::updateChannelParticipant>(update_ptr);
-      td_->contacts_manager_->on_update_channel_participant(
-          ChannelId(update->channel_id_), UserId(update->actor_id_), update->date_,
-          DialogInviteLink(std::move(update->invite_), true, "updateChannelParticipant"),
-          std::move(update->prev_participant_), std::move(update->new_participant_));
-      add_qts(qts).set_value(Unit());
-      break;
-    }
-    case telegram_api::updateBotChatInviteRequester::ID: {
-      auto update = move_tl_object_as<telegram_api::updateBotChatInviteRequester>(update_ptr);
-      td_->contacts_manager_->on_update_chat_invite_requester(
-          DialogId(update->peer_), UserId(update->user_id_), std::move(update->about_), update->date_,
-          DialogInviteLink(std::move(update->invite_), true, "updateBotChatInviteRequester"));
-      add_qts(qts).set_value(Unit());
-      break;
-    }
-    default:
-      UNREACHABLE();
-      break;
+    add_qts(qts).set_value(Unit());
+  } else {
+    add_qts(qts).set_value(Unit());
+    LOG(ERROR) << "Receive " << to_string(update_ptr);
   }
   promise.set_value(Unit());
 }
@@ -2711,8 +3112,8 @@ void UpdatesManager::process_qts_update(tl_object_ptr<telegram_api::Update> &&up
 void UpdatesManager::process_all_pending_pts_updates() {
   auto begin_time = Time::now();
   for (auto &update : pending_pts_updates_) {
-    td_->messages_manager_->process_pts_update(std::move(update.second.update));
-    update.second.promise.set_value(Unit());
+    td_->messages_manager_->process_pts_update(std::move(update.update));
+    update.promise.set_value(Unit());
   }
 
   if (last_pts_gap_time_ != 0) {
@@ -2733,6 +3134,7 @@ void UpdatesManager::process_all_pending_pts_updates() {
 void UpdatesManager::drop_all_pending_pts_updates() {
   accumulated_pts_count_ = 0;
   accumulated_pts_ = -1;
+  min_pts_gap_timeout_.cancel_timeout();
   pts_gap_timeout_.cancel_timeout();
   pending_pts_updates_.clear();
 }
@@ -2749,18 +3151,18 @@ void UpdatesManager::process_postponed_pts_updates() {
   int32 applied_update_count = 0;
   auto update_it = postponed_pts_updates_.begin();
   while (update_it != postponed_pts_updates_.end()) {
-    auto new_pts = update_it->second.pts;
-    auto pts_count = update_it->second.pts_count;
+    auto new_pts = update_it->pts;
+    auto pts_count = update_it->pts_count;
     if (new_pts <= old_pts || (old_pts >= 1 && new_pts - (1 << 30) > old_pts)) {
       skipped_update_count++;
-      td_->messages_manager_->skip_old_pending_pts_update(std::move(update_it->second.update), new_pts, old_pts,
-                                                          pts_count, "process_postponed_pts_updates");
-      update_it->second.promise.set_value(Unit());
+      td_->messages_manager_->skip_old_pending_pts_update(std::move(update_it->update), new_pts, old_pts, pts_count,
+                                                          "process_postponed_pts_updates");
+      update_it->promise.set_value(Unit());
       update_it = postponed_pts_updates_.erase(update_it);
       continue;
     }
 
-    if (Time::now() - begin_time >= td::min(UPDATE_APPLY_WARNING_TIME / 2, 0.1)) {
+    if (Time::now() - begin_time >= 0.1) {
       // the updates will be applied or skipped later; reget the remaining updates through getDifference
       break;
     }
@@ -2775,15 +3177,15 @@ void UpdatesManager::process_postponed_pts_updates() {
       if (old_pts > new_pts - pts_count || last_update_it == postponed_pts_updates_.end() ||
           i == GAP_TIMEOUT_UPDATE_COUNT) {
         // the updates can't be applied
-        VLOG(get_difference) << "Can't apply " << i << " next postponed updates with PTS " << update_it->second.pts
-                             << '-' << new_pts << ", because their pts_count is " << pts_count
-                             << " instead of expected " << new_pts - old_pts;
+        VLOG(get_difference) << "Can't apply " << i << " next postponed updates with PTS " << update_it->pts << '-'
+                             << new_pts << ", because their pts_count is " << pts_count << " instead of expected "
+                             << new_pts - old_pts;
         last_update_it = update_it;
         break;
       }
 
-      new_pts = last_update_it->second.pts;
-      pts_count += last_update_it->second.pts_count;
+      new_pts = last_update_it->pts;
+      pts_count += last_update_it->pts_count;
     }
 
     if (last_update_it == update_it) {
@@ -2793,11 +3195,11 @@ void UpdatesManager::process_postponed_pts_updates() {
     CHECK(old_pts == new_pts - pts_count);
 
     while (update_it != last_update_it) {
-      if (update_it->second.pts_count > 0) {
+      if (update_it->pts_count > 0) {
         applied_update_count++;
-        td_->messages_manager_->process_pts_update(std::move(update_it->second.update));
+        td_->messages_manager_->process_pts_update(std::move(update_it->update));
       }
-      update_it->second.promise.set_value(Unit());
+      update_it->promise.set_value(Unit());
       update_it = postponed_pts_updates_.erase(update_it);
     }
     old_pts = new_pts;
@@ -2832,7 +3234,7 @@ void UpdatesManager::process_pending_pts_updates() {
   int32 applied_update_count = 0;
   while (!pending_pts_updates_.empty()) {
     auto update_it = pending_pts_updates_.begin();
-    auto &update = update_it->second;
+    auto &update = *update_it;
     if (get_pts() != update.pts - update.pts_count) {
       // the updates will be applied or skipped later
       break;
@@ -2849,24 +3251,27 @@ void UpdatesManager::process_pending_pts_updates() {
         CHECK(accumulated_pts_count_ >= update.pts_count);
         accumulated_pts_count_ -= update.pts_count;
       }
+    } else {
+      LOG(INFO) << "Skip because of pts_count == 0 " << to_string(update.update);
     }
     update.promise.set_value(Unit());
     pending_pts_updates_.erase(update_it);
   }
   if (applied_update_count > 0) {
+    min_pts_gap_timeout_.cancel_timeout();
     pts_gap_timeout_.cancel_timeout();
   }
   if (!pending_pts_updates_.empty()) {
     // if still have a gap, reset timeout
     auto update_it = pending_pts_updates_.begin();
-    double receive_time = update_it->second.receive_time;
+    double receive_time = update_it->receive_time;
     for (size_t i = 0; i < GAP_TIMEOUT_UPDATE_COUNT; i++) {
       if (++update_it == pending_pts_updates_.end()) {
         break;
       }
-      receive_time = min(receive_time, update_it->second.receive_time);
+      receive_time = min(receive_time, update_it->receive_time);
     }
-    set_pts_gap_timeout(receive_time + MAX_UNFILLED_GAP_TIME - Time::now());
+    set_pts_gap_timeout(max(receive_time + MAX_UNFILLED_GAP_TIME - Time::now(), 0.001));
   }
 
   auto passed_time = Time::now() - begin_time;
@@ -2888,7 +3293,7 @@ void UpdatesManager::process_pending_seq_updates() {
   int32 applied_update_count = 0;
   while (!pending_seq_updates_.empty() && !running_get_difference_) {
     auto update_it = pending_seq_updates_.begin();
-    auto &update = update_it->second;
+    auto &update = *update_it;
     auto seq_begin = update.seq_begin;
     if (seq_begin - 1 > seq_ && seq_begin - (1 << 30) <= seq_) {
       // the updates will be applied later
@@ -2916,12 +3321,12 @@ void UpdatesManager::process_pending_seq_updates() {
   if (!pending_seq_updates_.empty()) {
     // if still have a gap, reset timeout
     auto update_it = pending_seq_updates_.begin();
-    double receive_time = update_it->second.receive_time;
+    double receive_time = update_it->receive_time;
     for (size_t i = 0; i < GAP_TIMEOUT_UPDATE_COUNT; i++) {
       if (++update_it == pending_seq_updates_.end()) {
         break;
       }
-      receive_time = min(receive_time, update_it->second.receive_time);
+      receive_time = min(receive_time, update_it->receive_time);
     }
     set_seq_gap_timeout(receive_time + MAX_UNFILLED_GAP_TIME - Time::now());
   }
@@ -2990,6 +3395,13 @@ void UpdatesManager::process_pending_qts_updates() {
 
 void UpdatesManager::set_pts_gap_timeout(double timeout) {
   if (!pts_gap_timeout_.has_timeout() || timeout < pts_gap_timeout_.get_timeout()) {
+    LOG(DEBUG) << "Set PTS gap timeout in " << timeout;
+    if (timeout > 2 * MIN_UNFILLED_GAP_TIME) {
+      min_pts_gap_timeout_.set_callback(std::move(check_pts_gap));
+      min_pts_gap_timeout_.set_callback_data(static_cast<void *>(td_));
+      min_pts_gap_timeout_.set_timeout_in(MIN_UNFILLED_GAP_TIME);
+    }
+
     pts_gap_timeout_.set_callback(std::move(fill_pts_gap));
     pts_gap_timeout_.set_callback_data(static_cast<void *>(td_));
     pts_gap_timeout_.set_timeout_in(timeout);
@@ -2999,6 +3411,7 @@ void UpdatesManager::set_pts_gap_timeout(double timeout) {
 
 void UpdatesManager::set_seq_gap_timeout(double timeout) {
   if (!seq_gap_timeout_.has_timeout() || timeout < seq_gap_timeout_.get_timeout()) {
+    LOG(DEBUG) << "Set seq gap timeout in " << timeout;
     seq_gap_timeout_.set_callback(std::move(fill_seq_gap));
     seq_gap_timeout_.set_callback_data(static_cast<void *>(td_));
     seq_gap_timeout_.set_timeout_in(timeout);
@@ -3007,6 +3420,7 @@ void UpdatesManager::set_seq_gap_timeout(double timeout) {
 
 void UpdatesManager::set_qts_gap_timeout(double timeout) {
   if (!qts_gap_timeout_.has_timeout() || timeout < qts_gap_timeout_.get_timeout()) {
+    LOG(DEBUG) << "Set QTS gap timeout in " << timeout;
     qts_gap_timeout_.set_callback(std::move(fill_qts_gap));
     qts_gap_timeout_.set_callback_data(static_cast<void *>(td_));
     qts_gap_timeout_.set_timeout_in(timeout);
@@ -3036,6 +3450,7 @@ void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateNewChannelMessa
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateMessageID> update, Promise<Unit> &&promise) {
   LOG(ERROR) << "Receive not in getDifference and not in on_pending_updates " << to_string(update);
+  promise.set_value(Unit());
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateReadMessagesContents> update,
@@ -3085,7 +3500,7 @@ void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateServiceNotifica
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateChat> update, Promise<Unit> &&promise) {
-  td_->messages_manager_->on_dialog_info_full_invalidated(DialogId(ChatId(update->chat_id_)));
+  td_->dialog_manager_->on_dialog_info_full_invalidated(DialogId(ChatId(update->chat_id_)));
   promise.set_value(Unit());
 }
 
@@ -3111,7 +3526,7 @@ void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateChannelTooLong>
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateChannel> update, Promise<Unit> &&promise) {
-  td_->contacts_manager_->invalidate_channel_full(ChannelId(update->channel_id_), false, "updateChannel");
+  td_->chat_manager_->invalidate_channel_full(ChannelId(update->channel_id_), false, "updateChannel");
   promise.set_value(Unit());
 }
 
@@ -3160,7 +3575,14 @@ void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateChannelMessageF
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateChannelAvailableMessages> update,
                                Promise<Unit> &&promise) {
   td_->messages_manager_->on_update_channel_max_unavailable_message_id(
-      ChannelId(update->channel_id_), MessageId(ServerMessageId(update->available_min_id_)));
+      ChannelId(update->channel_id_), MessageId(ServerMessageId(update->available_min_id_)),
+      "updateChannelAvailableMessages");
+  promise.set_value(Unit());
+}
+
+void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateChannelViewForumAsMessages> update,
+                               Promise<Unit> &&promise) {
+  td_->messages_manager_->on_update_dialog_view_as_messages(DialogId(ChannelId(update->channel_id_)), update->enabled_);
   promise.set_value(Unit());
 }
 
@@ -3286,7 +3708,7 @@ void UpdatesManager::on_update(tl_object_ptr<telegram_api::updatePeerHistoryTTL>
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updatePeerLocated> update, Promise<Unit> &&promise) {
-  td_->contacts_manager_->on_update_peer_located(std::move(update->peers_), true);
+  td_->people_nearby_manager_->on_update_peer_located(std::move(update->peers_), true);
   promise.set_value(Unit());
 }
 
@@ -3312,7 +3734,12 @@ void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateMessageReaction
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateRecentReactions> update, Promise<Unit> &&promise) {
-  td_->stickers_manager_->reload_recent_reactions();
+  td_->reaction_manager_->reload_reaction_list(ReactionListType::Recent, "updateRecentReactions");
+  promise.set_value(Unit());
+}
+
+void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateSavedReactionTags> update, Promise<Unit> &&promise) {
+  td_->reaction_manager_->on_update_saved_reaction_tags(Promise<Unit>());
   promise.set_value(Unit());
 }
 
@@ -3455,6 +3882,13 @@ bool UpdatesManager::is_qts_update(const telegram_api::Update *update) {
     case telegram_api::updateChatParticipant::ID:
     case telegram_api::updateChannelParticipant::ID:
     case telegram_api::updateBotChatInviteRequester::ID:
+    case telegram_api::updateBotChatBoost::ID:
+    case telegram_api::updateBotMessageReaction::ID:
+    case telegram_api::updateBotMessageReactions::ID:
+    case telegram_api::updateBotBusinessConnect::ID:
+    case telegram_api::updateBotNewBusinessMessage::ID:
+    case telegram_api::updateBotEditBusinessMessage::ID:
+    case telegram_api::updateBotDeleteBusinessMessage::ID:
       return true;
     default:
       return false;
@@ -3475,6 +3909,20 @@ int32 UpdatesManager::get_update_qts(const telegram_api::Update *update) {
       return static_cast<const telegram_api::updateChannelParticipant *>(update)->qts_;
     case telegram_api::updateBotChatInviteRequester::ID:
       return static_cast<const telegram_api::updateBotChatInviteRequester *>(update)->qts_;
+    case telegram_api::updateBotChatBoost::ID:
+      return static_cast<const telegram_api::updateBotChatBoost *>(update)->qts_;
+    case telegram_api::updateBotMessageReaction::ID:
+      return static_cast<const telegram_api::updateBotMessageReaction *>(update)->qts_;
+    case telegram_api::updateBotMessageReactions::ID:
+      return static_cast<const telegram_api::updateBotMessageReactions *>(update)->qts_;
+    case telegram_api::updateBotBusinessConnect::ID:
+      return static_cast<const telegram_api::updateBotBusinessConnect *>(update)->qts_;
+    case telegram_api::updateBotNewBusinessMessage::ID:
+      return static_cast<const telegram_api::updateBotNewBusinessMessage *>(update)->qts_;
+    case telegram_api::updateBotEditBusinessMessage::ID:
+      return static_cast<const telegram_api::updateBotEditBusinessMessage *>(update)->qts_;
+    case telegram_api::updateBotDeleteBusinessMessage::ID:
+      return static_cast<const telegram_api::updateBotDeleteBusinessMessage *>(update)->qts_;
     default:
       return 0;
   }
@@ -3494,56 +3942,57 @@ bool UpdatesManager::is_channel_pts_update(const telegram_api::Update *update) {
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateUserTyping> update, Promise<Unit> &&promise) {
   DialogId dialog_id(UserId(update->user_id_));
-  td_->messages_manager_->on_dialog_action(dialog_id, MessageId(), dialog_id, DialogAction(std::move(update->action_)),
-                                           get_short_update_date());
+  td_->dialog_action_manager_->on_dialog_action(dialog_id, MessageId(), dialog_id,
+                                                DialogAction(std::move(update->action_)), get_short_update_date());
   promise.set_value(Unit());
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateChatUserTyping> update, Promise<Unit> &&promise) {
-  td_->messages_manager_->on_dialog_action(DialogId(ChatId(update->chat_id_)), MessageId(), DialogId(update->from_id_),
-                                           DialogAction(std::move(update->action_)), get_short_update_date());
+  td_->dialog_action_manager_->on_dialog_action(DialogId(ChatId(update->chat_id_)), MessageId(),
+                                                DialogId(update->from_id_), DialogAction(std::move(update->action_)),
+                                                get_short_update_date());
   promise.set_value(Unit());
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateChannelUserTyping> update, Promise<Unit> &&promise) {
-  td_->messages_manager_->on_dialog_action(DialogId(ChannelId(update->channel_id_)),
-                                           MessageId(ServerMessageId(update->top_msg_id_)), DialogId(update->from_id_),
-                                           DialogAction(std::move(update->action_)), get_short_update_date());
+  td_->dialog_action_manager_->on_dialog_action(
+      DialogId(ChannelId(update->channel_id_)), MessageId(ServerMessageId(update->top_msg_id_)),
+      DialogId(update->from_id_), DialogAction(std::move(update->action_)), get_short_update_date());
   promise.set_value(Unit());
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateEncryptedChatTyping> update, Promise<Unit> &&promise) {
   SecretChatId secret_chat_id(update->chat_id_);
-  UserId user_id = td_->contacts_manager_->get_secret_chat_user_id(secret_chat_id);
-  td_->messages_manager_->on_dialog_action(DialogId(secret_chat_id), MessageId(), DialogId(user_id),
-                                           DialogAction::get_typing_action(), get_short_update_date());
+  UserId user_id = td_->user_manager_->get_secret_chat_user_id(secret_chat_id);
+  td_->dialog_action_manager_->on_dialog_action(DialogId(secret_chat_id), MessageId(), DialogId(user_id),
+                                                DialogAction::get_typing_action(), get_short_update_date());
   promise.set_value(Unit());
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateUserStatus> update, Promise<Unit> &&promise) {
-  td_->contacts_manager_->on_update_user_online(UserId(update->user_id_), std::move(update->status_));
+  td_->user_manager_->on_update_user_online(UserId(update->user_id_), std::move(update->status_));
   promise.set_value(Unit());
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateUserName> update, Promise<Unit> &&promise) {
-  td_->contacts_manager_->on_update_user_name(UserId(update->user_id_), std::move(update->first_name_),
-                                              std::move(update->last_name_),
-                                              Usernames{string(), std::move(update->usernames_)});
+  td_->user_manager_->on_update_user_name(UserId(update->user_id_), std::move(update->first_name_),
+                                          std::move(update->last_name_),
+                                          Usernames{string(), std::move(update->usernames_)});
   promise.set_value(Unit());
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateUserPhone> update, Promise<Unit> &&promise) {
-  td_->contacts_manager_->on_update_user_phone_number(UserId(update->user_id_), std::move(update->phone_));
+  td_->user_manager_->on_update_user_phone_number(UserId(update->user_id_), std::move(update->phone_));
   promise.set_value(Unit());
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateUser> update, Promise<Unit> &&promise) {
-  td_->contacts_manager_->invalidate_user_full(UserId(update->user_id_));
+  td_->user_manager_->invalidate_user_full(UserId(update->user_id_));
   promise.set_value(Unit());
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateUserEmojiStatus> update, Promise<Unit> &&promise) {
-  td_->contacts_manager_->on_update_user_emoji_status(UserId(update->user_id_), std::move(update->emoji_status_));
+  td_->user_manager_->on_update_user_emoji_status(UserId(update->user_id_), std::move(update->emoji_status_));
   promise.set_value(Unit());
 }
 
@@ -3553,58 +4002,59 @@ void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateRecentEmojiStat
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updatePeerBlocked> update, Promise<Unit> &&promise) {
-  td_->messages_manager_->on_update_dialog_is_blocked(DialogId(update->peer_id_), update->blocked_);
+  td_->messages_manager_->on_update_dialog_is_blocked(DialogId(update->peer_id_), update->blocked_,
+                                                      update->blocked_my_stories_from_);
   promise.set_value(Unit());
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateBotCommands> update, Promise<Unit> &&promise) {
-  td_->contacts_manager_->on_update_bot_commands(DialogId(update->peer_), UserId(update->bot_id_),
-                                                 std::move(update->commands_));
+  td_->dialog_manager_->on_update_dialog_bot_commands(DialogId(update->peer_), UserId(update->bot_id_),
+                                                      std::move(update->commands_));
   promise.set_value(Unit());
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateBotMenuButton> update, Promise<Unit> &&promise) {
-  td_->contacts_manager_->on_update_bot_menu_button(UserId(update->bot_id_), std::move(update->button_));
+  td_->user_manager_->on_update_bot_menu_button(UserId(update->bot_id_), std::move(update->button_));
   promise.set_value(Unit());
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateChatParticipants> update, Promise<Unit> &&promise) {
-  td_->contacts_manager_->on_get_chat_participants(std::move(update->participants_), true);
+  td_->chat_manager_->on_get_chat_participants(std::move(update->participants_), true);
   promise.set_value(Unit());
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateChatParticipantAdd> update, Promise<Unit> &&promise) {
-  td_->contacts_manager_->on_update_chat_add_user(ChatId(update->chat_id_), UserId(update->inviter_id_),
-                                                  UserId(update->user_id_), update->date_, update->version_);
+  td_->chat_manager_->on_update_chat_add_user(ChatId(update->chat_id_), UserId(update->inviter_id_),
+                                              UserId(update->user_id_), update->date_, update->version_);
   promise.set_value(Unit());
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateChatParticipantAdmin> update,
                                Promise<Unit> &&promise) {
-  td_->contacts_manager_->on_update_chat_edit_administrator(ChatId(update->chat_id_), UserId(update->user_id_),
-                                                            update->is_admin_, update->version_);
+  td_->chat_manager_->on_update_chat_edit_administrator(ChatId(update->chat_id_), UserId(update->user_id_),
+                                                        update->is_admin_, update->version_);
   promise.set_value(Unit());
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateChatParticipantDelete> update,
                                Promise<Unit> &&promise) {
-  td_->contacts_manager_->on_update_chat_delete_user(ChatId(update->chat_id_), UserId(update->user_id_),
-                                                     update->version_);
+  td_->chat_manager_->on_update_chat_delete_user(ChatId(update->chat_id_), UserId(update->user_id_), update->version_);
   promise.set_value(Unit());
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateChatDefaultBannedRights> update,
                                Promise<Unit> &&promise) {
   DialogId dialog_id(update->peer_);
-  RestrictedRights permissions(update->default_banned_rights_);
   auto version = update->version_;
   switch (dialog_id.get_type()) {
     case DialogType::Chat:
-      td_->contacts_manager_->on_update_chat_default_permissions(dialog_id.get_chat_id(), permissions, version);
+      td_->chat_manager_->on_update_chat_default_permissions(
+          dialog_id.get_chat_id(), RestrictedRights(update->default_banned_rights_, ChannelType::Unknown), version);
       break;
     case DialogType::Channel:
       LOG_IF(ERROR, version != 0) << "Receive version " << version << " in " << dialog_id;
-      td_->contacts_manager_->on_update_channel_default_permissions(dialog_id.get_channel_id(), permissions);
+      td_->chat_manager_->on_update_channel_default_permissions(
+          dialog_id.get_channel_id(), RestrictedRights(update->default_banned_rights_, ChannelType::Megagroup));
       break;
     case DialogType::None:
     case DialogType::User:
@@ -3633,24 +4083,31 @@ void UpdatesManager::on_update(tl_object_ptr<telegram_api::updatePinnedDialogs> 
   promise.set_value(Unit());
 }
 
+void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateSavedDialogPinned> update, Promise<Unit> &&promise) {
+  td_->saved_messages_manager_->reload_pinned_saved_messages_topics();
+  promise.set_value(Unit());
+}
+
+void UpdatesManager::on_update(tl_object_ptr<telegram_api::updatePinnedSavedDialogs> update, Promise<Unit> &&promise) {
+  td_->saved_messages_manager_->reload_pinned_saved_messages_topics();
+  promise.set_value(Unit());
+}
+
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateDialogUnreadMark> update, Promise<Unit> &&promise) {
   td_->messages_manager_->on_update_dialog_is_marked_as_unread(DialogId(update->peer_), update->unread_);
   promise.set_value(Unit());
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateDialogFilter> update, Promise<Unit> &&promise) {
-  td_->messages_manager_->on_update_dialog_filters();
-  promise.set_value(Unit());
+  td_->dialog_filter_manager_->on_update_dialog_filters(std::move(promise));
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateDialogFilters> update, Promise<Unit> &&promise) {
-  td_->messages_manager_->on_update_dialog_filters();
-  promise.set_value(Unit());
+  td_->dialog_filter_manager_->on_update_dialog_filters(std::move(promise));
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateDialogFilterOrder> update, Promise<Unit> &&promise) {
-  td_->messages_manager_->on_update_dialog_filters();
-  promise.set_value(Unit());
+  td_->dialog_filter_manager_->on_update_dialog_filters(std::move(promise));
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateDcOptions> update, Promise<Unit> &&promise) {
@@ -3659,13 +4116,13 @@ void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateDcOptions> upda
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateBotInlineQuery> update, Promise<Unit> &&promise) {
-  td_->inline_queries_manager_->on_new_query(update->query_id_, UserId(update->user_id_), Location(update->geo_),
+  td_->inline_queries_manager_->on_new_query(update->query_id_, UserId(update->user_id_), Location(td_, update->geo_),
                                              std::move(update->peer_type_), update->query_, update->offset_);
   promise.set_value(Unit());
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateBotInlineSend> update, Promise<Unit> &&promise) {
-  td_->inline_queries_manager_->on_chosen_result(UserId(update->user_id_), Location(update->geo_), update->query_,
+  td_->inline_queries_manager_->on_chosen_result(UserId(update->user_id_), Location(td_, update->geo_), update->query_,
                                                  update->id_, std::move(update->msg_id_));
   promise.set_value(Unit());
 }
@@ -3702,7 +4159,18 @@ void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateConfig> update,
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updatePtsChanged> update, Promise<Unit> &&promise) {
-  set_pts(std::numeric_limits<int32>::max(), "updatePtsChanged").set_value(Unit());
+  if (td_->option_manager_->get_option_integer("session_count") > 1) {
+    auto old_pts = get_pts();
+    auto new_pts = 1;
+    if (old_pts != new_pts) {
+      LOG(WARNING) << "PTS changes from " << old_pts << " from updatePtsChanged";
+      save_pts(new_pts);
+      add_pts(new_pts).set_value(Unit());
+      get_difference("updatePtsChanged");
+    }
+  } else {
+    set_pts(std::numeric_limits<int32>::max(), "updatePtsChanged").set_value(Unit());
+  }
   promise.set_value(Unit());
 }
 
@@ -3723,7 +4191,7 @@ void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateEncryptedMessag
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updatePrivacy> update, Promise<Unit> &&promise) {
-  send_closure(td_->privacy_manager_, &PrivacyManager::update_privacy, std::move(update));
+  td_->privacy_manager_->on_update_privacy(std::move(update));
   promise.set_value(Unit());
 }
 
@@ -3780,7 +4248,7 @@ void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateBotShippingQuer
     send_closure(
         G()->td(), &Td::send_update,
         make_tl_object<td_api::updateNewShippingQuery>(
-            update->query_id_, td_->contacts_manager_->get_user_id_object(user_id, "updateNewShippingQuery"),
+            update->query_id_, td_->user_manager_->get_user_id_object(user_id, "updateNewShippingQuery"),
             update->payload_.as_slice().str(),
             get_address_object(get_address(std::move(update->shipping_address_)))));  // TODO use convert_address
   }
@@ -3794,12 +4262,11 @@ void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateBotPrecheckoutQ
   } else if (update->total_amount_ <= 0 || !check_currency_amount(update->total_amount_)) {
     LOG(ERROR) << "Receive pre-checkout query with invalid total amount " << update->total_amount_;
   } else {
-    send_closure(
-        G()->td(), &Td::send_update,
-        make_tl_object<td_api::updateNewPreCheckoutQuery>(
-            update->query_id_, td_->contacts_manager_->get_user_id_object(user_id, "updateNewPreCheckoutQuery"),
-            update->currency_, update->total_amount_, update->payload_.as_slice().str(), update->shipping_option_id_,
-            get_order_info_object(get_order_info(std::move(update->info_)))));
+    send_closure(G()->td(), &Td::send_update,
+                 make_tl_object<td_api::updateNewPreCheckoutQuery>(
+                     update->query_id_, td_->user_manager_->get_user_id_object(user_id, "updateNewPreCheckoutQuery"),
+                     update->currency_, update->total_amount_, update->payload_.as_slice().str(),
+                     update->shipping_option_id_, get_order_info_object(get_order_info(std::move(update->info_)))));
   }
   promise.set_value(Unit());
 }
@@ -3839,9 +4306,9 @@ void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateGroupCallConnec
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateGroupCall> update, Promise<Unit> &&promise) {
   DialogId dialog_id(ChatId(update->chat_id_));
-  if (!td_->messages_manager_->have_dialog_force(dialog_id, "updateGroupCall")) {
+  if (!td_->dialog_manager_->have_dialog_force(dialog_id, "updateGroupCall")) {
     dialog_id = DialogId(ChannelId(update->chat_id_));
-    if (!td_->messages_manager_->have_dialog_force(dialog_id, "updateGroupCall")) {
+    if (!td_->dialog_manager_->have_dialog_force(dialog_id, "updateGroupCall")) {
       dialog_id = DialogId();
     }
   }
@@ -3857,7 +4324,7 @@ void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateGroupCallPartic
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateContactsReset> update, Promise<Unit> &&promise) {
-  td_->contacts_manager_->on_update_contacts_reset();
+  td_->user_manager_->on_update_contacts_reset();
   promise.set_value(Unit());
 }
 
@@ -3898,8 +4365,7 @@ void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateMessagePollVote
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateNewScheduledMessage> update, Promise<Unit> &&promise) {
-  td_->messages_manager_->on_get_message(std::move(update->message_), true, false, true, true, true,
-                                         "updateNewScheduledMessage");
+  td_->messages_manager_->on_get_message(std::move(update->message_), true, false, true, "updateNewScheduledMessage");
   promise.set_value(Unit());
 }
 
@@ -3939,8 +4405,32 @@ void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateBotChatInviteRe
   add_pending_qts_update(std::move(update), qts, std::move(promise));
 }
 
+void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateBotChatBoost> update, Promise<Unit> &&promise) {
+  auto qts = update->qts_;
+  add_pending_qts_update(std::move(update), qts, std::move(promise));
+}
+
+void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateBotMessageReaction> update, Promise<Unit> &&promise) {
+  auto qts = update->qts_;
+  add_pending_qts_update(std::move(update), qts, std::move(promise));
+}
+
+void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateBotMessageReactions> update, Promise<Unit> &&promise) {
+  auto qts = update->qts_;
+  add_pending_qts_update(std::move(update), qts, std::move(promise));
+}
+
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateTheme> update, Promise<Unit> &&promise) {
   td_->theme_manager_->on_update_theme(std::move(update->theme_), std::move(promise));
+}
+
+void UpdatesManager::on_update(tl_object_ptr<telegram_api::updatePeerWallpaper> update, Promise<Unit> &&promise) {
+  auto dialog_id = DialogId(update->peer_);
+  if (dialog_id.get_type() == DialogType::User) {
+    td_->user_manager_->on_update_user_wallpaper_overridden(dialog_id.get_user_id(), update->wallpaper_overridden_);
+  }
+  td_->messages_manager_->on_update_dialog_background(dialog_id, std::move(update->wallpaper_));
+  promise.set_value(Unit());
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updatePendingJoinRequests> update, Promise<Unit> &&promise) {
@@ -3954,31 +4444,108 @@ void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateSavedRingtones>
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateTranscribedAudio> update, Promise<Unit> &&promise) {
-  auto it = pending_audio_transcriptions_.find(update->transcription_id_);
-  if (it == pending_audio_transcriptions_.end()) {
-    return promise.set_value(Unit());
-  }
-  // flags_, dialog_id_ and message_id_ must not be used
-  if (!update->pending_) {
-    auto on_update = std::move(it->second);
-    pending_audio_transcriptions_.erase(it);
-    pending_audio_transcription_timeout_.cancel_timeout(update->transcription_id_);
-    on_update(std::move(update));
-  } else {
-    it->second(std::move(update));
-  }
-  promise.set_value(Unit());
-}
-
-void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateGroupInvitePrivacyForbidden> update,
-                               Promise<Unit> &&promise) {
-  LOG(ERROR) << "Receive " << to_string(update);
+  td_->transcription_manager_->on_update_transcribed_audio(std::move(update));
   promise.set_value(Unit());
 }
 
 void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateAutoSaveSettings> update, Promise<Unit> &&promise) {
   td_->autosave_manager_->reload_autosave_settings();
   promise.set_value(Unit());
+}
+
+void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateStory> update, Promise<Unit> &&promise) {
+  td_->story_manager_->on_get_story(DialogId(update->peer_), std::move(update->story_));
+  promise.set_value(Unit());
+}
+
+void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateReadStories> update, Promise<Unit> &&promise) {
+  td_->story_manager_->on_update_read_stories(DialogId(update->peer_), StoryId(update->max_id_));
+  promise.set_value(Unit());
+}
+
+void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateStoriesStealthMode> update, Promise<Unit> &&promise) {
+  td_->story_manager_->on_update_story_stealth_mode(std::move(update->stealth_mode_));
+  promise.set_value(Unit());
+}
+
+void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateSentStoryReaction> update, Promise<Unit> &&promise) {
+  td_->story_manager_->on_update_story_chosen_reaction_type(DialogId(update->peer_), StoryId(update->story_id_),
+                                                            ReactionType(update->reaction_));
+  promise.set_value(Unit());
+}
+
+void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateStoryID> update, Promise<Unit> &&promise) {
+  LOG(ERROR) << "Receive not in getDifference and not in on_pending_updates " << to_string(update);
+  promise.set_value(Unit());
+}
+
+void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateNewAuthorization> update, Promise<Unit> &&promise) {
+  if (update->unconfirmed_) {
+    td_->account_manager_->on_new_unconfirmed_authorization(update->hash_, update->date_, std::move(update->device_),
+                                                            std::move(update->location_));
+  } else {
+    td_->account_manager_->on_confirm_authorization(update->hash_);
+  }
+  promise.set_value(Unit());
+}
+
+void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateSmsJob> update, Promise<Unit> &&promise) {
+  LOG(ERROR) << "Receive " << to_string(update);
+  promise.set_value(Unit());
+}
+
+void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateQuickReplies> update, Promise<Unit> &&promise) {
+  td_->quick_reply_manager_->reload_quick_reply_shortcuts();
+  promise.set_value(Unit());
+}
+
+void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateNewQuickReply> update, Promise<Unit> &&promise) {
+  td_->quick_reply_manager_->reload_quick_reply_shortcuts();
+  promise.set_value(Unit());
+}
+
+void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateDeleteQuickReply> update, Promise<Unit> &&promise) {
+  td_->quick_reply_manager_->reload_quick_reply_shortcuts();
+  promise.set_value(Unit());
+}
+
+void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateQuickReplyMessage> update, Promise<Unit> &&promise) {
+  td_->quick_reply_manager_->update_quick_reply_message(std::move(update->message_));
+  promise.set_value(Unit());
+}
+
+void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateDeleteQuickReplyMessages> update,
+                               Promise<Unit> &&promise) {
+  vector<MessageId> message_ids;
+  for (auto message : update->messages_) {
+    message_ids.push_back(MessageId(ServerMessageId(message)));
+  }
+  td_->quick_reply_manager_->delete_quick_reply_messages_from_updates(QuickReplyShortcutId(update->shortcut_id_),
+                                                                      std::move(message_ids));
+  promise.set_value(Unit());
+}
+
+void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateBotBusinessConnect> update, Promise<Unit> &&promise) {
+  auto qts = update->qts_;
+  add_pending_qts_update(std::move(update), qts, std::move(promise));
+}
+
+void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateBotNewBusinessMessage> update,
+                               Promise<Unit> &&promise) {
+  auto qts = update->qts_;
+  add_pending_qts_update(std::move(update), qts, std::move(promise));
+}
+
+void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateBotEditBusinessMessage> update,
+                               Promise<Unit> &&promise) {
+  auto qts = update->qts_;
+  add_pending_qts_update(std::move(update), qts, std::move(promise));
+}
+
+void UpdatesManager::on_update(tl_object_ptr<telegram_api::updateBotDeleteBusinessMessage> update,
+                               Promise<Unit> &&promise) {
+  auto qts = update->qts_;
+  add_pending_qts_update(std::move(update), qts, std::move(promise));
 }
 
 // unsupported updates

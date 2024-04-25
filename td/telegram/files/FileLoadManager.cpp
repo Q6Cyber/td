@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2023
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -8,7 +8,6 @@
 
 #include "td/telegram/Global.h"
 #include "td/telegram/net/DcId.h"
-#include "td/telegram/TdParameters.h"
 
 #include "td/utils/common.h"
 #include "td/utils/filesystem.h"
@@ -24,10 +23,9 @@ FileLoadManager::FileLoadManager(ActorShared<Callback> callback, ActorShared<> p
 
 void FileLoadManager::start_up() {
   constexpr int64 MAX_UPLOAD_RESOURCE_LIMIT = 4 << 20;
-  upload_resource_manager_ = create_actor<ResourceManager>("UploadResourceManager", MAX_UPLOAD_RESOURCE_LIMIT,
-                                                           !G()->parameters().use_file_db /*tdlib_engine*/
-                                                               ? ResourceManager::Mode::Greedy
-                                                               : ResourceManager::Mode::Baseline);
+  upload_resource_manager_ = create_actor<ResourceManager>(
+      "UploadResourceManager", MAX_UPLOAD_RESOURCE_LIMIT,
+      !G()->keep_media_order() ? ResourceManager::Mode::Greedy : ResourceManager::Mode::Baseline);
   if (G()->get_option_boolean("is_premium")) {
     max_download_resource_limit_ *= 8;
   }

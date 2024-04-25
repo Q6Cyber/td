@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2023
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -389,8 +389,8 @@ class FileExternalGenerateActor final : public FileGenerateActor {
 };
 
 FileGenerateManager::Query::~Query() = default;
-FileGenerateManager::Query::Query(Query &&other) noexcept = default;
-FileGenerateManager::Query &FileGenerateManager::Query::operator=(Query &&other) noexcept = default;
+FileGenerateManager::Query::Query(Query &&) noexcept = default;
+FileGenerateManager::Query &FileGenerateManager::Query::operator=(Query &&) noexcept = default;
 
 static Status check_mtime(std::string &conversion, CSlice original_path) {
   if (original_path.empty()) {

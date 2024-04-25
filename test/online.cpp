@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2023
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -244,7 +244,6 @@ class InitTask : public Task {
         request->system_language_code_ = "en";
         request->device_model_ = "Desktop";
         request->application_version_ = "tdclient-test";
-        request->enable_storage_optimizer_ = true;
         send(std::move(request));
         break;
       }
@@ -333,7 +332,7 @@ class UploadFile : public Task {
     write_file(content_path_, content_).ensure();
 
     send_query(td::make_tl_object<td::td_api::sendMessage>(
-                   chat_id_, 0, 0, nullptr, nullptr,
+                   chat_id_, 0, nullptr, nullptr, nullptr,
                    td::make_tl_object<td::td_api::inputMessageDocument>(
                        td::make_tl_object<td::td_api::inputFileLocal>(content_path_), nullptr, true,
                        td::make_tl_object<td::td_api::formattedText>("tag", td::Auto()))),

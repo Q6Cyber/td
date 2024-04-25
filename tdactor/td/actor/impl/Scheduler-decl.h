@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2023
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -39,17 +39,17 @@ extern int VERBOSITY_NAME(actor);
 
 class ActorInfo;
 
-enum class ActorSendType { Immediate, Later, LaterWeak };
+enum class ActorSendType { Immediate, Later };
 
 class Scheduler;
 class SchedulerGuard {
  public:
   explicit SchedulerGuard(Scheduler *scheduler, bool lock = true);
   ~SchedulerGuard();
-  SchedulerGuard(const SchedulerGuard &other) = delete;
-  SchedulerGuard &operator=(const SchedulerGuard &other) = delete;
-  SchedulerGuard(SchedulerGuard &&other) = default;
-  SchedulerGuard &operator=(SchedulerGuard &&other) = delete;
+  SchedulerGuard(const SchedulerGuard &) = delete;
+  SchedulerGuard &operator=(const SchedulerGuard &) = delete;
+  SchedulerGuard(SchedulerGuard &&) = default;
+  SchedulerGuard &operator=(SchedulerGuard &&) = delete;
 
  private:
   MovableValue<bool> is_valid_ = true;
@@ -78,9 +78,7 @@ class Scheduler {
   Scheduler &operator=(Scheduler &&) = delete;
   ~Scheduler();
 
-  void init();
   void init(int32 id, std::vector<std::shared_ptr<MpscPollableQueue<EventFull>>> outbound, Callback *callback);
-  void clear();
 
   int32 sched_id() const;
   int32 sched_count() const;
@@ -109,7 +107,7 @@ class Scheduler {
   void destroy_on_scheduler(int32 sched_id, ArgsT &...values);
 
   template <ActorSendType send_type, class EventT>
-  void send_lambda(ActorRef actor_ref, EventT &&lambda);
+  void send_lambda(ActorRef actor_ref, EventT &&func);
 
   template <ActorSendType send_type, class EventT>
   void send_closure(ActorRef actor_ref, EventT &&closure);
@@ -172,6 +170,8 @@ class Scheduler {
   };
   friend class ServiceActor;
 
+  void clear();
+
   void do_event(ActorInfo *actor, Event &&event);
 
   void enter_actor(ActorInfo *actor_info);
@@ -194,8 +194,7 @@ class Scheduler {
   void add_to_mailbox(ActorInfo *actor_info, Event &&event);
   void clear_mailbox(ActorInfo *actor_info);
 
-  template <class RunFuncT, class EventFuncT>
-  void flush_mailbox(ActorInfo *actor_info, const RunFuncT &run_func, const EventFuncT &event_func);
+  void flush_mailbox(ActorInfo *actor_info);
 
   template <ActorSendType send_type, class RunFuncT, class EventFuncT>
   void send_impl(const ActorId<> &actor_id, const RunFuncT &run_func, const EventFuncT &event_func);

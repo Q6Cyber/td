@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2023
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -35,13 +35,13 @@ class ConcurrentBinlog final : public BinlogInterface {
 
   ConcurrentBinlog();
   explicit ConcurrentBinlog(unique_ptr<Binlog> binlog, int scheduler_id = -1);
-  ConcurrentBinlog(const ConcurrentBinlog &other) = delete;
-  ConcurrentBinlog &operator=(const ConcurrentBinlog &other) = delete;
-  ConcurrentBinlog(ConcurrentBinlog &&other) = delete;
-  ConcurrentBinlog &operator=(ConcurrentBinlog &&other) = delete;
+  ConcurrentBinlog(const ConcurrentBinlog &) = delete;
+  ConcurrentBinlog &operator=(const ConcurrentBinlog &) = delete;
+  ConcurrentBinlog(ConcurrentBinlog &&) = delete;
+  ConcurrentBinlog &operator=(ConcurrentBinlog &&) = delete;
   ~ConcurrentBinlog() final;
 
-  void force_sync(Promise<> promise) final;
+  void force_sync(Promise<> promise, const char *source) final;
   void force_flush() final;
   void change_key(DbKey db_key, Promise<> promise) final;
 

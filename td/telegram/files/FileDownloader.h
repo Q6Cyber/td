@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2023
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -83,7 +83,7 @@ class FileDownloader final : public FileLoader {
   Result<FileInfo> init() final TD_WARN_UNUSED_RESULT;
   Status on_ok(int64 size) final TD_WARN_UNUSED_RESULT;
   void on_error(Status status) final;
-  Result<bool> should_restart_part(Part part, NetQueryPtr &net_query) final TD_WARN_UNUSED_RESULT;
+  Result<bool> should_restart_part(Part part, const NetQueryPtr &net_query) final TD_WARN_UNUSED_RESULT;
   Result<std::pair<NetQueryPtr, bool>> start_part(Part part, int32 part_count,
                                                   int64 streaming_offset) final TD_WARN_UNUSED_RESULT;
   Result<size_t> process_part(Part part, NetQueryPtr net_query) final TD_WARN_UNUSED_RESULT;

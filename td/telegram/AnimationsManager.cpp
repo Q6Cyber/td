@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2023
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -22,7 +22,6 @@
 #include "td/telegram/Td.h"
 #include "td/telegram/td_api.h"
 #include "td/telegram/TdDb.h"
-#include "td/telegram/TdParameters.h"
 #include "td/telegram/telegram_api.h"
 
 #include "td/db/SqliteKeyValueAsync.h"
@@ -340,8 +339,8 @@ tl_object_ptr<telegram_api::InputMedia> AnimationsManager::get_input_media(
     string mime_type = animation->mime_type;
     if (mime_type == "video/mp4") {
       attributes.push_back(make_tl_object<telegram_api::documentAttributeVideo>(
-          0, false /*ignored*/, false /*ignored*/, animation->duration, animation->dimensions.width,
-          animation->dimensions.height));
+          0, false /*ignored*/, false /*ignored*/, false /*ignored*/, animation->duration, animation->dimensions.width,
+          animation->dimensions.height, 0));
     } else if (animation->dimensions.width != 0 && animation->dimensions.height != 0) {
       if (!begins_with(mime_type, "image/")) {
         mime_type = "image/gif";
@@ -419,7 +418,6 @@ void AnimationsManager::on_update_animation_search_emojis() {
     return;
   }
   if (td_->auth_manager_->is_bot()) {
-    td_->option_manager_->set_option_empty("animation_search_emojis");
     return;
   }
 
@@ -438,7 +436,6 @@ void AnimationsManager::on_update_animation_search_provider() {
     return;
   }
   if (td_->auth_manager_->is_bot()) {
-    td_->option_manager_->set_option_empty("animation_search_provider");
     return;
   }
 
@@ -454,6 +451,9 @@ void AnimationsManager::on_update_animation_search_provider() {
 
 void AnimationsManager::on_update_saved_animations_limit() {
   if (G()->close_flag()) {
+    return;
+  }
+  if (td_->auth_manager_->is_bot()) {
     return;
   }
   auto saved_animations_limit =
@@ -546,7 +546,7 @@ void AnimationsManager::load_saved_animations(Promise<Unit> &&promise) {
   }
   load_saved_animations_queries_.push_back(std::move(promise));
   if (load_saved_animations_queries_.size() == 1u) {
-    if (G()->parameters().use_file_db) {  // otherwise there is no sqlite_pmc, TODO
+    if (G()->use_sqlite_pmc()) {
       LOG(INFO) << "Trying to load saved animations from database";
       G()->td_db()->get_sqlite_pmc()->get("ans", PromiseCreator::lambda([](string value) {
                                             send_closure(G()->animations_manager(),
@@ -757,16 +757,8 @@ void AnimationsManager::add_saved_animation_impl(FileId animation_id, bool add_o
     return promise.set_error(Status::Error(400, "Can't save encrypted animations"));
   }
 
-  auto it = std::find_if(saved_animation_ids_.begin(), saved_animation_ids_.end(), is_equal);
-  if (it == saved_animation_ids_.end()) {
-    if (static_cast<int32>(saved_animation_ids_.size()) == saved_animations_limit_) {
-      saved_animation_ids_.back() = animation_id;
-    } else {
-      saved_animation_ids_.push_back(animation_id);
-    }
-    it = saved_animation_ids_.end() - 1;
-  }
-  std::rotate(saved_animation_ids_.begin(), it, it + 1);
+  add_to_top_if(saved_animation_ids_, static_cast<size_t>(saved_animations_limit_), animation_id, is_equal);
+
   CHECK(is_equal(saved_animation_ids_[0]));
   if (saved_animation_ids_[0].get_remote() == 0 && animation_id.get_remote() != 0) {
     saved_animation_ids_[0] = animation_id;
@@ -856,7 +848,7 @@ void AnimationsManager::send_update_saved_animations(bool from_database) {
 }
 
 void AnimationsManager::save_saved_animations_to_database() {
-  if (G()->parameters().use_file_db) {
+  if (G()->use_sqlite_pmc()) {
     LOG(INFO) << "Save saved animations to database";
     AnimationListLogEvent log_event(saved_animation_ids_);
     G()->td_db()->get_sqlite_pmc()->set("ans", log_event_store(log_event).as_slice().str(), Auto());

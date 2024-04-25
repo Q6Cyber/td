@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2023
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -217,10 +217,10 @@ class MpmcQueueOld {
     node.release();
   }
 
-  MpmcQueueOld(const MpmcQueueOld &other) = delete;
-  MpmcQueueOld &operator=(const MpmcQueueOld &other) = delete;
-  MpmcQueueOld(MpmcQueueOld &&other) = delete;
-  MpmcQueueOld &operator=(MpmcQueueOld &&other) = delete;
+  MpmcQueueOld(const MpmcQueueOld &) = delete;
+  MpmcQueueOld &operator=(const MpmcQueueOld &) = delete;
+  MpmcQueueOld(MpmcQueueOld &&) = delete;
+  MpmcQueueOld &operator=(MpmcQueueOld &&) = delete;
   ~MpmcQueueOld() {
     auto *ptr = read_pos_.load(std::memory_order_relaxed);
     while (ptr) {
@@ -324,7 +324,7 @@ class MpmcQueueOld {
   char pad2[TD_CONCURRENCY_PAD - sizeof(std::atomic<Node *>)];
   size_t block_size_;
   HazardPointers<Node, 1> hazard_pointers_;
-  // HazardPointers is already padded
+  // HazardPointers class is already padded
 };
 
 template <class T>
@@ -342,10 +342,10 @@ class MpmcQueue {
     node.release();
   }
 
-  MpmcQueue(const MpmcQueue &other) = delete;
-  MpmcQueue &operator=(const MpmcQueue &other) = delete;
-  MpmcQueue(MpmcQueue &&other) = delete;
-  MpmcQueue &operator=(MpmcQueue &&other) = delete;
+  MpmcQueue(const MpmcQueue &) = delete;
+  MpmcQueue &operator=(const MpmcQueue &) = delete;
+  MpmcQueue(MpmcQueue &&) = delete;
+  MpmcQueue &operator=(MpmcQueue &&) = delete;
   ~MpmcQueue() {
     auto *ptr = read_pos_.load(std::memory_order_relaxed);
     while (ptr) {
@@ -454,7 +454,7 @@ class MpmcQueue {
   std::atomic<Node *> read_pos_{nullptr};
   char pad2[TD_CONCURRENCY_PAD - sizeof(std::atomic<Node *>)];
   HazardPointers<Node, 1> hazard_pointers_;
-  // HazardPointers is already padded
+  // HazardPointers class is already padded
 };
 
 }  // namespace td

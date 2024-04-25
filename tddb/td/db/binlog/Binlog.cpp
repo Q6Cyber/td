@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2023
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -286,9 +286,9 @@ Status Binlog::close(bool need_sync) {
     return Status::OK();
   }
   if (need_sync) {
-    sync();
+    sync("close");
   } else {
-    flush();
+    flush("close");
   }
 
   fd_.lock(FileFd::LockFlags::Unlock, path_, 1).ensure();
@@ -373,7 +373,7 @@ void Binlog::do_event(BinlogEvent &&event) {
         LOG(INFO) << "Load: init encryption";
       } else {
         CHECK(state_ == State::Reindex);
-        flush();
+        flush("do_event");
         update_write_encryption();
         //LOG(INFO) << format::cond(state_ == State::Run, "Run", "Reindex") << ": init encryption";
       }
@@ -404,19 +404,21 @@ void Binlog::do_event(BinlogEvent &&event) {
   fd_size_ += event_size;
 }
 
-void Binlog::sync() {
-  flush();
+void Binlog::sync(const char *source) {
+  flush(source);
   if (need_sync_) {
+    LOG(INFO) << "Sync binlog from " << source;
     auto status = fd_.sync();
     LOG_IF(FATAL, status.is_error()) << "Failed to sync binlog: " << status;
     need_sync_ = false;
   }
 }
 
-void Binlog::flush() {
+void Binlog::flush(const char *source) {
   if (state_ == State::Load) {
     return;
   }
+  LOG(DEBUG) << "Flush binlog from " << source;
   flush_events_buffer(true);
   // NB: encryption happens during flush
   if (byte_flow_flag_) {
@@ -430,6 +432,17 @@ void Binlog::flush() {
   }
   need_flush_since_ = 0;
   LOG_IF(FATAL, fd_.need_flush_write()) << "Failed to flush binlog";
+
+  if (state_ == State::Run && Time::now() > next_buffer_flush_time_) {
+    VLOG(binlog) << "Flush write buffer";
+    buffer_writer_ = ChainBufferWriter();
+    buffer_reader_ = buffer_writer_.extract_reader();
+    if (encryption_type_ == EncryptionType::AesCtr) {
+      aes_ctr_state_ = aes_xcode_byte_flow_.move_aes_ctr_state();
+    }
+    update_write_encryption();
+    next_buffer_flush_time_ = Time::now() + 1.0;
+  }
 }
 
 void Binlog::lazy_flush() {
@@ -437,7 +450,7 @@ void Binlog::lazy_flush() {
   buffer_reader_.sync_with_writer();
   auto size = buffer_reader_.size() + events_buffer_size;
   if (size > (1 << 14)) {
-    flush();
+    flush("lazy_flush");
   } else if (size > 0 && need_flush_since_ == 0) {
     need_flush_since_ = Time::now_cached();
   }
@@ -649,7 +662,7 @@ void Binlog::do_reindex() {
     do_event(std::move(event));  // NB: no move is actually happens
   });
   {
-    flush();
+    flush("do_reindex");
     if (start_size != 0) {  // must sync creation of the file if it is non-empty
       auto status = fd_.sync_barrier();
       LOG_IF(FATAL, status.is_error()) << "Failed to sync binlog: " << status;

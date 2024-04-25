@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2023
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -47,10 +47,10 @@ class Binlog {
  public:
   enum class Error : int { WrongPassword = -1037284 };
   Binlog();
-  Binlog(const Binlog &other) = delete;
-  Binlog &operator=(const Binlog &other) = delete;
-  Binlog(Binlog &&other) = delete;
-  Binlog &operator=(Binlog &&other) = delete;
+  Binlog(const Binlog &) = delete;
+  Binlog &operator=(const Binlog &) = delete;
+  Binlog(Binlog &&) = delete;
+  Binlog &operator=(Binlog &&) = delete;
   ~Binlog();
 
   using Callback = std::function<void(const BinlogEvent &)>;
@@ -109,8 +109,8 @@ class Binlog {
   }
 
   void add_event(BinlogEvent &&event);
-  void sync();
-  void flush();
+  void sync(const char *source);
+  void flush(const char *source);
   void lazy_flush();
   double need_flush_since() const {
     return need_flush_since_;
@@ -161,6 +161,7 @@ class Binlog {
   bool in_flush_events_buffer_{false};
   uint64 last_event_id_{0};
   double need_flush_since_ = 0;
+  double next_buffer_flush_time_ = 0;
   bool need_sync_{false};
   enum class State { Empty, Load, Reindex, Run } state_{State::Empty};
 

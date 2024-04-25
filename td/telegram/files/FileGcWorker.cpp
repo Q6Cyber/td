@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2023
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -10,7 +10,6 @@
 #include "td/telegram/files/FileManager.h"
 #include "td/telegram/files/FileType.h"
 #include "td/telegram/Global.h"
-#include "td/telegram/TdParameters.h"
 
 #include "td/utils/algorithm.h"
 #include "td/utils/format.h"
@@ -38,7 +37,7 @@ void FileGcWorker::run_gc(const FileGcParameters &parameters, std::vector<FullFi
 
   std::array<bool, MAX_FILE_TYPE> immune_types{{false}};
 
-  if (G()->parameters().use_file_db) {
+  if (G()->use_file_database()) {
     // immune by default
     immune_types[narrow_cast<size_t>(FileType::Sticker)] = true;
     immune_types[narrow_cast<size_t>(FileType::ProfilePhoto)] = true;
@@ -61,7 +60,7 @@ void FileGcWorker::run_gc(const FileGcParameters &parameters, std::vector<FullFi
     }
   }
 
-  if (G()->parameters().use_file_db) {
+  if (G()->use_file_database()) {
     immune_types[narrow_cast<size_t>(FileType::EncryptedThumbnail)] = true;
   }
 

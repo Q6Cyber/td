@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2023
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -106,6 +106,7 @@ TEST(Port, files) {
   fd.seek(0).ensure();
   ASSERT_EQ(13u, fd.read(buf_slice.substr(0, 13)).move_as_ok());
   ASSERT_STREQ("Habcd world?!", buf_slice.substr(0, 13));
+  td::rmrf(main_dir).ensure();
 }
 
 TEST(Port, SparseFiles) {

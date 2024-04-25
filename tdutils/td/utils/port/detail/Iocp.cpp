@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2023
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -38,7 +38,7 @@ void Iocp::loop() {
       callback->on_iocp(bytes, overlapped);
     } else {
       if (overlapped != nullptr) {
-        auto error = OS_ERROR("Received from IOCP");
+        auto error = OS_ERROR("Receive IOCP error");
         auto callback = reinterpret_cast<Iocp::Callback *>(key);
         CHECK(callback != nullptr);
         callback->on_iocp(std::move(error), overlapped);

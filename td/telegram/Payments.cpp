@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2023
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -7,8 +7,9 @@
 #include "td/telegram/Payments.h"
 
 #include "td/telegram/AccessRights.h"
-#include "td/telegram/ContactsManager.h"
 #include "td/telegram/DialogId.h"
+#include "td/telegram/DialogManager.h"
+#include "td/telegram/GiveawayParameters.h"
 #include "td/telegram/Global.h"
 #include "td/telegram/InputInvoice.h"
 #include "td/telegram/MessageEntity.h"
@@ -17,18 +18,21 @@
 #include "td/telegram/misc.h"
 #include "td/telegram/PasswordManager.h"
 #include "td/telegram/Photo.h"
+#include "td/telegram/Premium.h"
 #include "td/telegram/ServerMessageId.h"
 #include "td/telegram/Td.h"
 #include "td/telegram/telegram_api.h"
 #include "td/telegram/ThemeManager.h"
 #include "td/telegram/UpdatesManager.h"
 #include "td/telegram/UserId.h"
+#include "td/telegram/UserManager.h"
 
 #include "td/utils/algorithm.h"
 #include "td/utils/buffer.h"
 #include "td/utils/common.h"
 #include "td/utils/JsonBuilder.h"
 #include "td/utils/logging.h"
+#include "td/utils/misc.h"
 #include "td/utils/Status.h"
 
 namespace td {
@@ -53,7 +57,7 @@ Result<InputInvoiceInfo> get_input_invoice_info(Td *td, td_api::object_ptr<td_ap
       MessageId message_id(invoice->message_id_);
       TRY_RESULT(server_message_id, td->messages_manager_->get_invoice_message_id({dialog_id, message_id}));
 
-      auto input_peer = td->messages_manager_->get_input_peer(dialog_id, AccessRights::Read);
+      auto input_peer = td->dialog_manager_->get_input_peer(dialog_id, AccessRights::Read);
       if (input_peer == nullptr) {
         return Status::Error(400, "Can't access the chat");
       }
@@ -66,6 +70,55 @@ Result<InputInvoiceInfo> get_input_invoice_info(Td *td, td_api::object_ptr<td_ap
     case td_api::inputInvoiceName::ID: {
       auto invoice = td_api::move_object_as<td_api::inputInvoiceName>(input_invoice);
       result.input_invoice_ = make_tl_object<telegram_api::inputInvoiceSlug>(invoice->name_);
+      break;
+    }
+    case td_api::inputInvoiceTelegram::ID: {
+      auto invoice = td_api::move_object_as<td_api::inputInvoiceTelegram>(input_invoice);
+      if (invoice->purpose_ == nullptr) {
+        return Status::Error(400, "Purpose must be non-empty");
+      }
+      switch (invoice->purpose_->get_id()) {
+        case td_api::telegramPaymentPurposePremiumGiftCodes::ID: {
+          auto p = static_cast<const td_api::telegramPaymentPurposePremiumGiftCodes *>(invoice->purpose_.get());
+          vector<telegram_api::object_ptr<telegram_api::InputUser>> input_users;
+          for (auto user_id : p->user_ids_) {
+            TRY_RESULT(input_user, td->user_manager_->get_input_user(UserId(user_id)));
+            input_users.push_back(std::move(input_user));
+          }
+          if (p->amount_ <= 0 || !check_currency_amount(p->amount_)) {
+            return Status::Error(400, "Invalid amount of the currency specified");
+          }
+          DialogId boosted_dialog_id(p->boosted_chat_id_);
+          TRY_RESULT(boost_input_peer, get_boost_input_peer(td, boosted_dialog_id));
+          int32 flags = 0;
+          if (boost_input_peer != nullptr) {
+            flags |= telegram_api::inputStorePaymentPremiumGiftCode::BOOST_PEER_MASK;
+          }
+          auto option = telegram_api::make_object<telegram_api::premiumGiftCodeOption>(
+              0, static_cast<int32>(input_users.size()), p->month_count_, string(), 0, p->currency_, p->amount_);
+          auto purpose = telegram_api::make_object<telegram_api::inputStorePaymentPremiumGiftCode>(
+              flags, std::move(input_users), std::move(boost_input_peer), p->currency_, p->amount_);
+
+          result.dialog_id_ = boosted_dialog_id;
+          result.input_invoice_ = telegram_api::make_object<telegram_api::inputInvoicePremiumGiftCode>(
+              std::move(purpose), std::move(option));
+          break;
+        }
+        case td_api::telegramPaymentPurposePremiumGiveaway::ID: {
+          auto p = static_cast<const td_api::telegramPaymentPurposePremiumGiveaway *>(invoice->purpose_.get());
+          if (p->amount_ <= 0 || !check_currency_amount(p->amount_)) {
+            return Status::Error(400, "Invalid amount of the currency specified");
+          }
+          TRY_RESULT(parameters, GiveawayParameters::get_giveaway_parameters(td, p->parameters_.get()));
+          auto option = telegram_api::make_object<telegram_api::premiumGiftCodeOption>(
+              0, p->winner_count_, p->month_count_, string(), 0, p->currency_, p->amount_);
+          result.input_invoice_ = telegram_api::make_object<telegram_api::inputInvoicePremiumGiftCode>(
+              parameters.get_input_store_payment_premium_giveaway(td, p->currency_, p->amount_), std::move(option));
+          break;
+        }
+        default:
+          UNREACHABLE();
+      }
       break;
     }
     default:
@@ -193,15 +246,22 @@ static tl_object_ptr<td_api::invoice> convert_invoice(tl_object_ptr<telegram_api
     invoice->suggested_tip_amounts_.resize(4);
   }
 
+  string recurring_terms_url;
+  string terms_url;
+  if (invoice->recurring_) {
+    recurring_terms_url = std::move(invoice->terms_url_);
+  } else {
+    terms_url = std::move(invoice->terms_url_);
+  }
   return make_tl_object<td_api::invoice>(std::move(invoice->currency_), std::move(labeled_prices),
                                          invoice->max_tip_amount_, std::move(invoice->suggested_tip_amounts_),
-                                         std::move(invoice->recurring_terms_url_), is_test, need_name,
-                                         need_phone_number, need_email_address, need_shipping_address,
-                                         send_phone_number_to_provider, send_email_address_to_provider, is_flexible);
+                                         recurring_terms_url, terms_url, is_test, need_name, need_phone_number,
+                                         need_email_address, need_shipping_address, send_phone_number_to_provider,
+                                         send_email_address_to_provider, is_flexible);
 }
 
 static tl_object_ptr<td_api::PaymentProvider> convert_payment_provider(
-    const string &native_provider_name, tl_object_ptr<telegram_api::dataJSON> native_parameters) {
+    const string &native_provider_name, tl_object_ptr<telegram_api::dataJSON> native_parameters, bool is_test) {
   if (native_parameters == nullptr) {
     return nullptr;
   }
@@ -220,17 +280,23 @@ static tl_object_ptr<td_api::PaymentProvider> convert_payment_provider(
       return nullptr;
     }
 
-    auto r_public_token = get_json_object_string_field(value.get_object(), "public_token", false);
-
+    const auto &object = value.get_object();
+    auto r_public_token = object.get_required_string_field("public_token");
     if (r_public_token.is_error()) {
       LOG(ERROR) << "Unsupported JSON data \"" << native_parameters->data_ << '"';
       return nullptr;
     }
-    if (value.get_object().size() != 1) {
+    string tokenize_url = is_test ? "https://tgb-playground.smart-glocal.com/cds/v1/tokenize/card"
+                                  : "https://tgb.smart-glocal.com/cds/v1/tokenize/card";
+    auto r_tokenize_url = object.get_optional_string_field("tokenize_url");
+    if (r_tokenize_url.is_ok() && begins_with(r_tokenize_url.ok(), "https://") &&
+        ends_with(r_tokenize_url.ok(), ".smart-glocal.com/cds/v1/tokenize/card")) {
+      tokenize_url = r_tokenize_url.move_as_ok();
+    }
+    if (object.field_count() > 2) {
       LOG(ERROR) << "Unsupported JSON data \"" << native_parameters->data_ << '"';
     }
-
-    return make_tl_object<td_api::paymentProviderSmartGlocal>(r_public_token.move_as_ok());
+    return make_tl_object<td_api::paymentProviderSmartGlocal>(r_public_token.move_as_ok(), tokenize_url);
   }
   if (native_provider_name == "stripe") {
     string data = native_parameters->data_;
@@ -246,10 +312,11 @@ static tl_object_ptr<td_api::PaymentProvider> convert_payment_provider(
       return nullptr;
     }
 
-    auto r_need_country = get_json_object_bool_field(value.get_object(), "need_country", false);
-    auto r_need_postal_code = get_json_object_bool_field(value.get_object(), "need_zip", false);
-    auto r_need_cardholder_name = get_json_object_bool_field(value.get_object(), "need_cardholder_name", false);
-    auto r_publishable_key = get_json_object_string_field(value.get_object(), "publishable_key", false);
+    const auto &object = value.get_object();
+    auto r_need_country = object.get_required_bool_field("need_country");
+    auto r_need_postal_code = object.get_required_bool_field("need_zip");
+    auto r_need_cardholder_name = object.get_required_bool_field("need_cardholder_name");
+    auto r_publishable_key = object.get_required_string_field("publishable_key");
     // TODO support "gpay_parameters":{"gateway":"stripe","stripe:publishableKey":"...","stripe:version":"..."}
 
     if (r_need_country.is_error() || r_need_postal_code.is_error() || r_need_cardholder_name.is_error() ||
@@ -257,7 +324,7 @@ static tl_object_ptr<td_api::PaymentProvider> convert_payment_provider(
       LOG(ERROR) << "Unsupported JSON data \"" << native_parameters->data_ << '"';
       return nullptr;
     }
-    if (value.get_object().size() != 5) {
+    if (object.field_count() != 5) {
       LOG(ERROR) << "Unsupported JSON data \"" << native_parameters->data_ << '"';
     }
 
@@ -366,7 +433,7 @@ class GetPaymentFormQuery final : public Td::ResultHandler {
     auto payment_form = result_ptr.move_as_ok();
     LOG(INFO) << "Receive result for GetPaymentFormQuery: " << to_string(payment_form);
 
-    td_->contacts_manager_->on_get_users(std::move(payment_form->users_), "GetPaymentFormQuery");
+    td_->user_manager_->on_get_users(std::move(payment_form->users_), "GetPaymentFormQuery");
 
     UserId payments_provider_user_id(payment_form->provider_id_);
     if (!payments_provider_user_id.is_valid()) {
@@ -381,8 +448,8 @@ class GetPaymentFormQuery final : public Td::ResultHandler {
     bool can_save_credentials = payment_form->can_save_credentials_;
     bool need_password = payment_form->password_missing_;
     auto photo = get_web_document_photo(td_->file_manager_.get(), std::move(payment_form->photo_), dialog_id_);
-    auto payment_provider =
-        convert_payment_provider(payment_form->native_provider_, std::move(payment_form->native_params_));
+    auto payment_provider = convert_payment_provider(
+        payment_form->native_provider_, std::move(payment_form->native_params_), payment_form->invoice_->test_);
     if (payment_provider == nullptr) {
       payment_provider = td_api::make_object<td_api::paymentProviderOther>(std::move(payment_form->url_));
     }
@@ -392,8 +459,8 @@ class GetPaymentFormQuery final : public Td::ResultHandler {
         });
     promise_.set_value(make_tl_object<td_api::paymentForm>(
         payment_form->form_id_, convert_invoice(std::move(payment_form->invoice_)),
-        td_->contacts_manager_->get_user_id_object(seller_bot_user_id, "paymentForm seller"),
-        td_->contacts_manager_->get_user_id_object(payments_provider_user_id, "paymentForm provider"),
+        td_->user_manager_->get_user_id_object(seller_bot_user_id, "paymentForm seller"),
+        td_->user_manager_->get_user_id_object(payments_provider_user_id, "paymentForm provider"),
         std::move(payment_provider), std::move(additional_payment_options),
         convert_order_info(std::move(payment_form->saved_info_)),
         convert_saved_credentials(std::move(payment_form->saved_credentials_)), can_save_credentials, need_password,
@@ -402,7 +469,7 @@ class GetPaymentFormQuery final : public Td::ResultHandler {
   }
 
   void on_error(Status status) final {
-    td_->messages_manager_->on_get_dialog_error(dialog_id_, status, "GetPaymentFormQuery");
+    td_->dialog_manager_->on_get_dialog_error(dialog_id_, status, "GetPaymentFormQuery");
     promise_.set_error(std::move(status));
   }
 };
@@ -447,7 +514,7 @@ class ValidateRequestedInfoQuery final : public Td::ResultHandler {
   }
 
   void on_error(Status status) final {
-    td_->messages_manager_->on_get_dialog_error(dialog_id_, status, "ValidateRequestedInfoQuery");
+    td_->dialog_manager_->on_get_dialog_error(dialog_id_, status, "ValidateRequestedInfoQuery");
     promise_.set_error(std::move(status));
   }
 };
@@ -512,7 +579,7 @@ class SendPaymentFormQuery final : public Td::ResultHandler {
   }
 
   void on_error(Status status) final {
-    td_->messages_manager_->on_get_dialog_error(dialog_id_, status, "SendPaymentFormQuery");
+    td_->dialog_manager_->on_get_dialog_error(dialog_id_, status, "SendPaymentFormQuery");
     promise_.set_error(std::move(status));
   }
 };
@@ -528,7 +595,7 @@ class GetPaymentReceiptQuery final : public Td::ResultHandler {
 
   void send(DialogId dialog_id, ServerMessageId server_message_id) {
     dialog_id_ = dialog_id;
-    auto input_peer = td_->messages_manager_->get_input_peer(dialog_id, AccessRights::Read);
+    auto input_peer = td_->dialog_manager_->get_input_peer(dialog_id, AccessRights::Read);
     if (input_peer == nullptr) {
       return on_error(Status::Error(400, "Can't access the chat"));
     }
@@ -546,7 +613,7 @@ class GetPaymentReceiptQuery final : public Td::ResultHandler {
     auto payment_receipt = result_ptr.move_as_ok();
     LOG(INFO) << "Receive result for GetPaymentReceiptQuery: " << to_string(payment_receipt);
 
-    td_->contacts_manager_->on_get_users(std::move(payment_receipt->users_), "GetPaymentReceiptQuery");
+    td_->user_manager_->on_get_users(std::move(payment_receipt->users_), "GetPaymentReceiptQuery");
 
     UserId payments_provider_user_id(payment_receipt->provider_id_);
     if (!payments_provider_user_id.is_valid()) {
@@ -567,15 +634,15 @@ class GetPaymentReceiptQuery final : public Td::ResultHandler {
     promise_.set_value(make_tl_object<td_api::paymentReceipt>(
         payment_receipt->title_, get_product_description_object(payment_receipt->description_),
         get_photo_object(td_->file_manager_.get(), photo), payment_receipt->date_,
-        td_->contacts_manager_->get_user_id_object(seller_bot_user_id, "paymentReceipt seller"),
-        td_->contacts_manager_->get_user_id_object(payments_provider_user_id, "paymentReceipt provider"),
+        td_->user_manager_->get_user_id_object(seller_bot_user_id, "paymentReceipt seller"),
+        td_->user_manager_->get_user_id_object(payments_provider_user_id, "paymentReceipt provider"),
         convert_invoice(std::move(payment_receipt->invoice_)), convert_order_info(std::move(payment_receipt->info_)),
         convert_shipping_option(std::move(payment_receipt->shipping_)), std::move(payment_receipt->credentials_title_),
         payment_receipt->tip_amount_));
   }
 
   void on_error(Status status) final {
-    td_->messages_manager_->on_get_dialog_error(dialog_id_, status, "GetPaymentReceiptQuery");
+    td_->dialog_manager_->on_get_dialog_error(dialog_id_, status, "GetPaymentReceiptQuery");
     promise_.set_error(std::move(status));
   }
 };
@@ -691,6 +758,44 @@ class GetBankCardInfoQuery final : public Td::ResultHandler {
       return td_api::make_object<td_api::bankCardActionOpenUrl>(open_url->name_, open_url->url_);
     });
     promise_.set_value(td_api::make_object<td_api::bankCardInfo>(response->title_, std::move(actions)));
+  }
+
+  void on_error(Status status) final {
+    promise_.set_error(std::move(status));
+  }
+};
+
+class GetCollectibleInfoQuery final : public Td::ResultHandler {
+  Promise<td_api::object_ptr<td_api::collectibleItemInfo>> promise_;
+
+ public:
+  explicit GetCollectibleInfoQuery(Promise<td_api::object_ptr<td_api::collectibleItemInfo>> &&promise)
+      : promise_(std::move(promise)) {
+  }
+
+  void send(telegram_api::object_ptr<telegram_api::InputCollectible> &&input_collectible) {
+    send_query(
+        G()->net_query_creator().create(telegram_api::fragment_getCollectibleInfo(std::move(input_collectible))));
+  }
+
+  void on_result(BufferSlice packet) final {
+    auto result_ptr = fetch_result<telegram_api::fragment_getCollectibleInfo>(packet);
+    if (result_ptr.is_error()) {
+      return on_error(result_ptr.move_as_error());
+    }
+
+    auto result = result_ptr.move_as_ok();
+    if (result->amount_ <= 0 || !check_currency_amount(result->amount_)) {
+      LOG(ERROR) << "Receive invalid collectible item price " << result->amount_;
+      result->amount_ = 0;
+    }
+    if (result->crypto_currency_.empty() || result->crypto_amount_ <= 0) {
+      LOG(ERROR) << "Receive invalid collectible item cryptocurrency price " << result->crypto_amount_;
+      result->crypto_amount_ = 0;
+    }
+    promise_.set_value(td_api::make_object<td_api::collectibleItemInfo>(result->purchase_date_, result->currency_,
+                                                                        result->amount_, result->crypto_currency_,
+                                                                        result->crypto_amount_, result->url_));
   }
 
   void on_error(Status status) final {
@@ -855,12 +960,12 @@ void send_payment_form(Td *td, td_api::object_ptr<td_api::InputInvoice> &&input_
              std::move(input_credentials), tip_amount);
 }
 
-void get_payment_receipt(Td *td, FullMessageId full_message_id,
+void get_payment_receipt(Td *td, MessageFullId message_full_id,
                          Promise<tl_object_ptr<td_api::paymentReceipt>> &&promise) {
   TRY_RESULT_PROMISE(promise, server_message_id,
-                     td->messages_manager_->get_payment_successful_message_id(full_message_id));
+                     td->messages_manager_->get_payment_successful_message_id(message_full_id));
   td->create_handler<GetPaymentReceiptQuery>(std::move(promise))
-      ->send(full_message_id.get_dialog_id(), server_message_id);
+      ->send(message_full_id.get_dialog_id(), server_message_id);
 }
 
 void get_saved_order_info(Td *td, Promise<tl_object_ptr<td_api::orderInfo>> &&promise) {
@@ -889,6 +994,35 @@ void export_invoice(Td *td, td_api::object_ptr<td_api::InputMessageContent> &&in
 void get_bank_card_info(Td *td, const string &bank_card_number,
                         Promise<td_api::object_ptr<td_api::bankCardInfo>> &&promise) {
   td->create_handler<GetBankCardInfoQuery>(std::move(promise))->send(bank_card_number);
+}
+
+void get_collectible_info(Td *td, td_api::object_ptr<td_api::CollectibleItemType> type,
+                          Promise<td_api::object_ptr<td_api::collectibleItemInfo>> &&promise) {
+  if (type == nullptr) {
+    return promise.set_error(Status::Error(400, "Item type must be non-empty"));
+  }
+  switch (type->get_id()) {
+    case td_api::collectibleItemTypeUsername::ID: {
+      auto username = td_api::move_object_as<td_api::collectibleItemTypeUsername>(type);
+      if (!clean_input_string(username->username_)) {
+        return promise.set_error(Status::Error(400, "Username must be encoded in UTF-8"));
+      }
+      td->create_handler<GetCollectibleInfoQuery>(std::move(promise))
+          ->send(telegram_api::make_object<telegram_api::inputCollectibleUsername>(username->username_));
+      break;
+    }
+    case td_api::collectibleItemTypePhoneNumber::ID: {
+      auto phone_number = td_api::move_object_as<td_api::collectibleItemTypePhoneNumber>(type);
+      if (!clean_input_string(phone_number->phone_number_)) {
+        return promise.set_error(Status::Error(400, "Phone number must be encoded in UTF-8"));
+      }
+      td->create_handler<GetCollectibleInfoQuery>(std::move(promise))
+          ->send(telegram_api::make_object<telegram_api::inputCollectiblePhone>(phone_number->phone_number_));
+      break;
+    }
+    default:
+      UNREACHABLE();
+  }
 }
 
 }  // namespace td

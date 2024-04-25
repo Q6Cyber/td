@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2023
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -136,8 +136,8 @@ struct ContactEqual {
 
 struct ContactHash {
   uint32 operator()(const Contact &contact) const {
-    return (Hash<string>()(contact.phone_number_) * 2023654985u + Hash<string>()(contact.first_name_)) * 2023654985u +
-           Hash<string>()(contact.last_name_);
+    return combine_hashes(combine_hashes(Hash<string>()(contact.phone_number_), Hash<string>()(contact.first_name_)),
+                          Hash<string>()(contact.last_name_));
   }
 };
 

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2023
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -59,10 +59,14 @@ class StatsCallback final : public mtproto::RawConnection::StatsCallback {
   }
 
   void on_read(uint64 bytes) final {
-    net_stats_callback_->on_read(bytes);
+    if (net_stats_callback_ != nullptr) {
+      net_stats_callback_->on_read(bytes);
+    }
   }
   void on_write(uint64 bytes) final {
-    net_stats_callback_->on_write(bytes);
+    if (net_stats_callback_ != nullptr) {
+      net_stats_callback_->on_write(bytes);
+    }
   }
 
   void on_pong() final {
@@ -106,20 +110,20 @@ ConnectionCreator::ClientInfo::ClientInfo() {
   mtproto_error_flood_control.add_limit(8, 3);
 }
 
-int64 ConnectionCreator::ClientInfo::extract_session_id() {
+uint64 ConnectionCreator::ClientInfo::extract_session_id() {
   if (!session_ids_.empty()) {
     auto res = *session_ids_.begin();
     session_ids_.erase(session_ids_.begin());
     return res;
   }
-  int64 res = 0;
+  uint64 res = 0;
   while (res == 0) {
-    res = Random::secure_int64();
+    res = Random::secure_uint64();
   }
   return res;
 }
 
-void ConnectionCreator::ClientInfo::add_session_id(int64 session_id) {
+void ConnectionCreator::ClientInfo::add_session_id(uint64 session_id) {
   if (session_id != 0) {
     session_ids_.insert(session_id);
   }
@@ -128,9 +132,9 @@ void ConnectionCreator::ClientInfo::add_session_id(int64 session_id) {
 ConnectionCreator::ConnectionCreator(ActorShared<> parent) : parent_(std::move(parent)) {
 }
 
-ConnectionCreator::ConnectionCreator(ConnectionCreator &&other) = default;
+ConnectionCreator::ConnectionCreator(ConnectionCreator &&) = default;
 
-ConnectionCreator &ConnectionCreator::operator=(ConnectionCreator &&other) = default;
+ConnectionCreator &ConnectionCreator::operator=(ConnectionCreator &&) = default;
 
 ConnectionCreator::~ConnectionCreator() = default;
 
@@ -164,6 +168,10 @@ void ConnectionCreator::add_proxy(int32 old_proxy_id, string server, int32 port,
     G()->td_db()->get_binlog_pmc()->erase(get_proxy_used_database_key(old_proxy_id));
     proxy_last_used_date_.erase(old_proxy_id);
     proxy_last_used_saved_date_.erase(old_proxy_id);
+  } else {
+#if TD_EMSCRIPTEN || TD_DARWIN_WATCH_OS
+    return promise.set_error(Status::Error(400, "The method is unsupported for the platform"));
+#endif
   }
 
   auto proxy_id = [&] {
@@ -339,7 +347,7 @@ void ConnectionCreator::ping_proxy_resolved(int32 proxy_id, IPAddress ip_address
   auto socket_fd = r_socket_fd.move_as_ok();
 
   auto connection_promise = PromiseCreator::lambda(
-      [ip_address, promise = std::move(promise), actor_id = actor_id(this), transport_type = extra.transport_type,
+      [actor_id = actor_id(this), ip_address, promise = std::move(promise), transport_type = extra.transport_type,
        debug_str = extra.debug_str](Result<ConnectionData> r_connection_data) mutable {
         if (r_connection_data.is_error()) {
           return promise.set_error(Status::Error(400, r_connection_data.error().public_message()));
@@ -415,7 +423,7 @@ void ConnectionCreator::enable_proxy_impl(int32 proxy_id) {
 void ConnectionCreator::disable_proxy_impl() {
   if (active_proxy_id_ == 0) {
     send_closure(G()->messages_manager(), &MessagesManager::remove_sponsored_dialog);
-    send_closure(G()->td(), &Td::schedule_get_promo_data, 0);
+    send_closure(G()->td(), &Td::reload_promo_data);
     return;
   }
   CHECK(proxies_.count(active_proxy_id_) == 1);
@@ -450,7 +458,7 @@ void ConnectionCreator::on_proxy_changed(bool from_db) {
   if (active_proxy_id_ == 0 || !from_db) {
     send_closure(G()->messages_manager(), &MessagesManager::remove_sponsored_dialog);
   }
-  send_closure(G()->td(), &Td::schedule_get_promo_data, 0);
+  send_closure(G()->td(), &Td::reload_promo_data);
 
   loop();
 }
@@ -615,7 +623,7 @@ void ConnectionCreator::request_raw_connection_by_ip(IPAddress ip_address, mtpro
   }
   auto socket_fd = r_socket_fd.move_as_ok();
 
-  auto connection_promise = PromiseCreator::lambda([promise = std::move(promise), actor_id = actor_id(this),
+  auto connection_promise = PromiseCreator::lambda([actor_id = actor_id(this), promise = std::move(promise),
                                                     transport_type, network_generation = network_generation_,
                                                     ip_address](Result<ConnectionData> r_connection_data) mutable {
     if (r_connection_data.is_error()) {
@@ -888,6 +896,7 @@ void ConnectionCreator::client_loop(ClientInfo &client) {
     flood_control.add_event(Time::now());
 
     auto socket_fd = r_socket_fd.move_as_ok();
+#if !TD_DARWIN_WATCH_OS
     IPAddress debug_ip;
     auto debug_ip_status = debug_ip.init_socket_address(socket_fd);
     if (debug_ip_status.is_ok()) {
@@ -895,6 +904,7 @@ void ConnectionCreator::client_loop(ClientInfo &client) {
     } else {
       LOG(ERROR) << debug_ip_status;
     }
+#endif
 
     client.pending_connections++;
     if (check_mode) {
@@ -930,7 +940,7 @@ void ConnectionCreator::client_create_raw_connection(Result<ConnectionData> r_co
                                                      string debug_str, uint32 network_generation) {
   unique_ptr<mtproto::AuthData> auth_data;
   uint64 auth_data_generation{0};
-  int64 session_id{0};
+  uint64 session_id{0};
   if (check_mode) {
     auto it = clients_.find(hash);
     CHECK(it != clients_.end());
@@ -988,7 +998,7 @@ void ConnectionCreator::client_set_timeout_at(ClientInfo &client, double wakeup_
 }
 
 void ConnectionCreator::client_add_connection(uint32 hash, Result<unique_ptr<mtproto::RawConnection>> r_raw_connection,
-                                              bool check_flag, uint64 auth_data_generation, int64 session_id) {
+                                              bool check_flag, uint64 auth_data_generation, uint64 session_id) {
   auto &client = clients_[hash];
   client.add_session_id(session_id);
   CHECK(client.pending_connections > 0);
@@ -1023,6 +1033,10 @@ void ConnectionCreator::on_dc_options(DcOptions new_dc_options) {
   VLOG(connections) << "SAVE " << new_dc_options;
   G()->td_db()->get_binlog_pmc()->set("dc_options", serialize(new_dc_options));
   dc_options_set_.reset();
+  add_dc_options(std::move(new_dc_options));
+}
+
+void ConnectionCreator::add_dc_options(DcOptions &&new_dc_options) {
   dc_options_set_.add_dc_options(get_default_dc_options(G()->is_test_dc()));
 #if !TD_EMSCRIPTEN  // FIXME
   dc_options_set_.add_dc_options(std::move(new_dc_options));
@@ -1081,9 +1095,24 @@ void ConnectionCreator::start_up() {
   if (status.is_error()) {
     on_dc_options(DcOptions());
   } else {
-    on_dc_options(std::move(dc_options));
+    add_dc_options(std::move(dc_options));
   }
 
+  if (G()->td_db()->get_binlog_pmc()->get("proxy_max_id") != "2" ||
+      !G()->td_db()->get_binlog_pmc()->get(get_proxy_database_key(1)).empty()) {
+    // don't need to init proxies if they have never been added
+    init_proxies();
+  } else {
+    max_proxy_id_ = 2;
+  }
+
+  ref_cnt_guard_ = create_reference(-1);
+
+  is_inited_ = true;
+  loop();
+}
+
+void ConnectionCreator::init_proxies() {
   auto proxy_info = G()->td_db()->get_binlog_pmc()->prefix_get("proxy");
   auto it = proxy_info.find("_max_id");
   if (it != proxy_info.end()) {
@@ -1111,6 +1140,8 @@ void ConnectionCreator::start_up() {
       log_event_parse(proxies_[proxy_id], info.second).ensure();
       if (proxies_[proxy_id].type() == Proxy::Type::None) {
         LOG_IF(ERROR, proxy_id != 1) << "Have empty proxy " << proxy_id;
+        G()->td_db()->get_binlog_pmc()->erase(get_proxy_database_key(proxy_id));
+        G()->td_db()->get_binlog_pmc()->erase(get_proxy_used_database_key(proxy_id));
         proxies_.erase(proxy_id);
         if (active_proxy_id_ == proxy_id) {
           set_active_proxy_id(0);
@@ -1139,11 +1170,6 @@ void ConnectionCreator::start_up() {
 
     on_proxy_changed(true);
   }
-
-  ref_cnt_guard_ = create_reference(-1);
-
-  is_inited_ = true;
-  loop();
 }
 
 void ConnectionCreator::hangup_shared() {
@@ -1172,20 +1198,21 @@ void ConnectionCreator::hangup() {
 DcOptions ConnectionCreator::get_default_dc_options(bool is_test) {
   DcOptions res;
   enum class HostType : int32 { IPv4, IPv6, Url };
-  auto add_ip_ports = [&res](int32 dc_id, const vector<string> &ips, const vector<int> &ports,
+  auto add_ip_ports = [&res](int32 dc_id, vector<string> ip_address_strings, const vector<int> &ports,
                              HostType type = HostType::IPv4) {
     IPAddress ip_address;
+    Random::shuffle(ip_address_strings);
     for (auto port : ports) {
-      for (auto &ip : ips) {
+      for (auto &ip_address_string : ip_address_strings) {
         switch (type) {
           case HostType::IPv4:
-            ip_address.init_ipv4_port(ip, port).ensure();
+            ip_address.init_ipv4_port(ip_address_string, port).ensure();
             break;
           case HostType::IPv6:
-            ip_address.init_ipv6_port(ip, port).ensure();
+            ip_address.init_ipv6_port(ip_address_string, port).ensure();
             break;
           case HostType::Url:
-            ip_address.init_host_port(ip, port).ensure();
+            ip_address.init_host_port(ip_address_string, port).ensure();
             break;
         }
         res.dc_options.emplace_back(DcId::internal(dc_id), ip_address);

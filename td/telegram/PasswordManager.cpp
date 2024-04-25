@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2023
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -14,6 +14,7 @@
 #include "td/telegram/net/NetQueryDispatcher.h"
 #include "td/telegram/SuggestedAction.h"
 #include "td/telegram/TdDb.h"
+#include "td/telegram/telegram_api.h"
 
 #include "td/mtproto/DhHandshake.h"
 
@@ -31,10 +32,11 @@
 namespace td {
 
 tl_object_ptr<td_api::temporaryPasswordState> TempPasswordState::get_temporary_password_state_object() const {
-  if (!has_temp_password || valid_until <= G()->unix_time()) {
+  auto unix_time = G()->unix_time();
+  if (!has_temp_password || valid_until <= unix_time) {
     return make_tl_object<td_api::temporaryPasswordState>(false, 0);
   }
-  return make_tl_object<td_api::temporaryPasswordState>(true, valid_until - G()->unix_time_cached());
+  return make_tl_object<td_api::temporaryPasswordState>(true, valid_until - unix_time);
 }
 
 static void hash_sha256(Slice data, Slice salt, MutableSlice dest) {
@@ -243,8 +245,8 @@ void PasswordManager::do_get_secure_secret(bool allow_recursive, string password
     return promise.set_error(Status::Error(400, "PASSWORD_HASH_INVALID"));
   }
   get_full_state(
-      password, PromiseCreator::lambda([password, allow_recursive, promise = std::move(promise),
-                                        actor_id = actor_id(this)](Result<PasswordFullState> r_state) mutable {
+      password, PromiseCreator::lambda([actor_id = actor_id(this), password, allow_recursive,
+                                        promise = std::move(promise)](Result<PasswordFullState> r_state) mutable {
         if (r_state.is_error()) {
           return promise.set_error(r_state.move_as_error());
         }
@@ -261,7 +263,7 @@ void PasswordManager::do_get_secure_secret(bool allow_recursive, string password
         }
 
         auto new_promise =
-            PromiseCreator::lambda([password, promise = std::move(promise), actor_id](Result<bool> r_ok) mutable {
+            PromiseCreator::lambda([actor_id, password, promise = std::move(promise)](Result<bool> r_ok) mutable {
               if (r_ok.is_error()) {
                 return promise.set_error(r_ok.move_as_error());
               }
@@ -301,8 +303,8 @@ void PasswordManager::create_temp_password(string password, int32 timeout, Promi
     send_closure(actor_id, &PasswordManager::on_finish_create_temp_password, std::move(result), false);
   });
 
-  do_get_state(PromiseCreator::lambda([password = std::move(password), timeout, promise = std::move(new_promise),
-                                       actor_id = actor_id(this)](Result<PasswordState> r_state) mutable {
+  do_get_state(PromiseCreator::lambda([actor_id = actor_id(this), password = std::move(password), timeout,
+                                       promise = std::move(new_promise)](Result<PasswordState> r_state) mutable {
     if (r_state.is_error()) {
       return promise.set_error(r_state.move_as_error());
     }
@@ -349,8 +351,8 @@ void PasswordManager::get_full_state(string password, Promise<PasswordFullState>
   send_closure(G()->config_manager(), &ConfigManager::hide_suggested_action,
                SuggestedAction{SuggestedAction::Type::CheckPassword});
 
-  do_get_state(PromiseCreator::lambda([password = std::move(password), promise = std::move(promise),
-                                       actor_id = actor_id(this)](Result<PasswordState> r_state) mutable {
+  do_get_state(PromiseCreator::lambda([actor_id = actor_id(this), password = std::move(password),
+                                       promise = std::move(promise)](Result<PasswordState> r_state) mutable {
     if (r_state.is_error()) {
       return promise.set_error(r_state.move_as_error());
     }
@@ -453,6 +455,18 @@ void PasswordManager::resend_recovery_email_address_code(Promise<State> promise)
   send_with_promise(std::move(query), PromiseCreator::lambda([actor_id = actor_id(this), promise = std::move(promise)](
                                                                  Result<NetQueryPtr> r_query) mutable {
                       auto r_result = fetch_result<telegram_api::account_resendPasswordEmail>(std::move(r_query));
+                      if (r_result.is_error() && r_result.error().message() != "EMAIL_HASH_EXPIRED") {
+                        return promise.set_error(r_result.move_as_error());
+                      }
+                      send_closure(actor_id, &PasswordManager::get_state, std::move(promise));
+                    }));
+}
+
+void PasswordManager::cancel_recovery_email_address_verification(Promise<State> promise) {
+  auto query = G()->net_query_creator().create(telegram_api::account_cancelPasswordEmail());
+  send_with_promise(std::move(query), PromiseCreator::lambda([actor_id = actor_id(this), promise = std::move(promise)](
+                                                                 Result<NetQueryPtr> r_query) mutable {
+                      auto r_result = fetch_result<telegram_api::account_cancelPasswordEmail>(std::move(r_query));
                       if (r_result.is_error() && r_result.error().message() != "EMAIL_HASH_EXPIRED") {
                         return promise.set_error(r_result.move_as_error());
                       }

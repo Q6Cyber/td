@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2023
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -102,10 +102,11 @@ struct PhotoRemoteFileLocation {
     if (id_ != other.id_) {
       return id_ < other.id_;
     }
-    return source_.get_unique() < other.source_.get_unique();
+    return PhotoSizeSource::unique_less(source_, other.source_);
   }
+
   bool operator==(const PhotoRemoteFileLocation &other) const {
-    return id_ == other.id_ && source_.get_unique() == other.source_.get_unique();
+    return id_ == other.id_ && PhotoSizeSource::unique_equal(source_, other.source_);
   }
 };
 
@@ -393,6 +394,7 @@ class FullRemoteFileLocation {
             auto &thumbnail = source.thumbnail();
             switch (thumbnail.file_type) {
               case FileType::Photo:
+              case FileType::PhotoStory:
                 return make_tl_object<telegram_api::inputPhotoFileLocation>(
                     id, access_hash, BufferSlice(file_reference_),
                     std::string(1, static_cast<char>(static_cast<uint8>(thumbnail.thumbnail_type))));
@@ -522,44 +524,17 @@ class FullRemoteFileLocation {
   }
 
   bool operator<(const FullRemoteFileLocation &other) const {
-    if (key_type() != other.key_type()) {
-      return key_type() < other.key_type();
+    if (!(variant_ == other.variant_)) {
+      return variant_ < other.variant_;
     }
-    if (dc_id_ != other.dc_id_) {
-      return dc_id_ < other.dc_id_;
+    if (file_type_ != other.file_type_) {
+      return file_type_ < other.file_type_;
     }
-    switch (location_type()) {
-      case LocationType::Photo:
-        return photo() < other.photo();
-      case LocationType::Common:
-        return common() < other.common();
-      case LocationType::Web:
-        return web() < other.web();
-      case LocationType::None:
-      default:
-        UNREACHABLE();
-        return false;
-    }
+    return dc_id_ < other.dc_id_;
   }
+
   bool operator==(const FullRemoteFileLocation &other) const {
-    if (key_type() != other.key_type()) {
-      return false;
-    }
-    if (dc_id_ != other.dc_id_) {
-      return false;
-    }
-    switch (location_type()) {
-      case LocationType::Photo:
-        return photo() == other.photo();
-      case LocationType::Common:
-        return common() == other.common();
-      case LocationType::Web:
-        return web() == other.web();
-      case LocationType::None:
-      default:
-        UNREACHABLE();
-        return false;
-    }
+    return variant_ == other.variant_ && file_type_ == other.file_type_ && dc_id_ == other.dc_id_;
   }
 
   static const int32 KEY_MAGIC = 0x64374632;
@@ -567,7 +542,7 @@ class FullRemoteFileLocation {
 
 inline StringBuilder &operator<<(StringBuilder &string_builder,
                                  const FullRemoteFileLocation &full_remote_file_location) {
-  string_builder << "[" << full_remote_file_location.file_type_;
+  string_builder << '[' << full_remote_file_location.file_type_;
   if (!full_remote_file_location.is_web()) {
     string_builder << ", " << full_remote_file_location.get_dc_id();
   }
@@ -584,7 +559,7 @@ inline StringBuilder &operator<<(StringBuilder &string_builder,
     string_builder << full_remote_file_location.common();
   }
 
-  return string_builder << "]";
+  return string_builder << ']';
 }
 
 class RemoteFileLocation {
@@ -734,11 +709,11 @@ struct FullLocalFileLocation {
 };
 
 inline bool operator<(const FullLocalFileLocation &lhs, const FullLocalFileLocation &rhs) {
-  return std::tie(lhs.file_type_, lhs.mtime_nsec_, lhs.path_) < std::tie(rhs.file_type_, rhs.mtime_nsec_, rhs.path_);
+  return std::tie(lhs.mtime_nsec_, lhs.file_type_, lhs.path_) < std::tie(rhs.mtime_nsec_, rhs.file_type_, rhs.path_);
 }
 
 inline bool operator==(const FullLocalFileLocation &lhs, const FullLocalFileLocation &rhs) {
-  return std::tie(lhs.file_type_, lhs.mtime_nsec_, lhs.path_) == std::tie(rhs.file_type_, rhs.mtime_nsec_, rhs.path_);
+  return std::tie(lhs.mtime_nsec_, lhs.file_type_, lhs.path_) == std::tie(rhs.mtime_nsec_, rhs.file_type_, rhs.path_);
 }
 
 inline bool operator!=(const FullLocalFileLocation &lhs, const FullLocalFileLocation &rhs) {
