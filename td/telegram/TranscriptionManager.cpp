@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -357,7 +357,7 @@ void TranscriptionManager::on_transcription_updated(FileId file_id) {
   auto it = voice_messages_.find(file_id);
   if (it != voice_messages_.end()) {
     for (const auto &message_full_id : it->second) {
-      td_->messages_manager_->on_external_update_message_content(message_full_id);
+      td_->messages_manager_->on_external_update_message_content(message_full_id, "on_transcription_updated");
     }
   }
 }
@@ -373,7 +373,7 @@ void TranscriptionManager::on_transcription_completed(FileId file_id) {
 
 void TranscriptionManager::rate_speech_recognition(MessageFullId message_full_id, bool is_good,
                                                    Promise<Unit> &&promise) {
-  if (!td_->messages_manager_->have_message_force(message_full_id, "recognize_speech")) {
+  if (!td_->messages_manager_->have_message_force(message_full_id, "rate_speech_recognition")) {
     return promise.set_error(Status::Error(400, "Message not found"));
   }
 

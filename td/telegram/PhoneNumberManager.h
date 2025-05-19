@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -30,12 +30,15 @@ class PhoneNumberManager final : public Actor {
 
   void send_firebase_sms(const string &token, Promise<Unit> &&promise);
 
-  void resend_authentication_code(Promise<td_api::object_ptr<td_api::authenticationCodeInfo>> &&promise);
+  void report_missing_code(const string &mobile_network_code, Promise<Unit> &&promise);
+
+  void resend_authentication_code(td_api::object_ptr<td_api::ResendCodeReason> &&reason,
+                                  Promise<td_api::object_ptr<td_api::authenticationCodeInfo>> &&promise);
 
   void check_code(string code, Promise<Unit> &&promise);
 
  private:
-  enum class Type : int32 { ChangePhone, VerifyPhone, ConfirmPhone };
+  enum class Type : int32 { None, ChangePhone, VerifyPhone, ConfirmPhone };
   enum class State : int32 { Ok, WaitCode } state_ = State::Ok;
 
   void tear_down() final;
@@ -53,7 +56,7 @@ class PhoneNumberManager final : public Actor {
   Td *td_;
   ActorShared<> parent_;
 
-  Type type_;
+  Type type_ = Type::None;
   SendCodeHelper send_code_helper_;
   int64 generation_ = 0;
 };

@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -244,8 +244,12 @@ class TlWriterDotNet final : public TL_writer {
     if (field_name == class_name) {
       fixed_field_name += "Value";
     }
-    if (type_name == field_name + "^" || (type_name == "Message^" && field_name == "ReplyToMessage")) {
-      auto fixed_type_name = "::Telegram::Td::Api::" + type_name;
+    auto is_web_page_stickers =
+        (class_name == "WebPage" && field_name == "Stickers" && type_name == "Array<Sticker^>^");
+    if (type_name == field_name + "^" || (type_name == "Message^" && field_name == "ReplyToMessage") ||
+        is_web_page_stickers) {
+      auto fixed_type_name =
+          is_web_page_stickers ? "Array<::Telegram::Td::Api::Sticker^>^" : "::Telegram::Td::Api::" + type_name;
       std::stringstream ss;
       ss << "private:\n";
       ss << "  " << fixed_type_name << " " << fixed_field_name << "PrivateField;\n";
@@ -460,8 +464,8 @@ class TlWriterDotNet final : public TL_writer {
     // ss << gen_field_name(a.name) << " = from_unmanaged(from->" <<
     // gen_native_field_name(a.name) << ");\n"; return ss.str();
   }
-  std::string gen_field_store(const arg &a, std::vector<var_description> &vars, bool flat,
-                              int storer_type) const final {
+  std::string gen_field_store(const arg &a, const std::vector<tl::arg> &args, std::vector<var_description> &vars,
+                              bool flat, int storer_type) const final {
     return "";
     // std::stringstream ss;
     // ss << "to_unmanaged(" << gen_field_name(a.name) << ")";

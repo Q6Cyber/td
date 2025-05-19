@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -50,7 +50,7 @@ BackgroundFill::BackgroundFill(const telegram_api::wallPaperSettings *settings) 
   }
 
   auto flags = settings->flags_;
-  if ((flags & telegram_api::wallPaperSettings::EMOTICON_MASK) != 0) {
+  if (!settings->emoticon_.empty()) {
     LOG(ERROR) << "Receive filled background with " << to_string(*settings);
   }
   if ((flags & telegram_api::wallPaperSettings::BACKGROUND_COLOR_MASK) != 0) {
@@ -88,6 +88,9 @@ BackgroundFill::BackgroundFill(const telegram_api::wallPaperSettings *settings) 
     }
   } else {
     bottom_color_ = top_color_;
+  }
+  if (get_type() != Type::Gradient) {
+    rotation_angle_ = 0;
   }
 }
 
@@ -238,6 +241,11 @@ bool operator==(const BackgroundFill &lhs, const BackgroundFill &rhs) {
          lhs.fourth_color_ == rhs.fourth_color_;
 }
 
+StringBuilder &operator<<(StringBuilder &string_builder, const BackgroundFill &fill) {
+  return string_builder << "BackgroundFill[" << fill.top_color_ << '~' << fill.bottom_color_ << '~' << fill.third_color_
+                        << '~' << fill.fourth_color_ << ':' << fill.rotation_angle_ << ']';
+}
+
 string BackgroundType::get_mime_type() const {
   CHECK(has_file());
   return type_ == Type::Pattern ? "image/png" : "image/jpeg";
@@ -340,6 +348,8 @@ StringBuilder &operator<<(StringBuilder &string_builder, const BackgroundType &t
       UNREACHABLE();
       break;
   }
+  // string_builder << ' ' << type.is_blurred_ << ' ' << type.is_moving_ << ' ' << type.intensity_ << ' ' << type.fill_
+  //                << ' ' << type.theme_name_ << ' ';
   return string_builder << '[' << type.get_link() << ']';
 }
 
@@ -401,7 +411,7 @@ BackgroundType::BackgroundType(bool has_no_file, bool is_pattern,
   }
   if (has_no_file) {
     CHECK(settings != nullptr);
-    if ((settings->flags_ & telegram_api::wallPaperSettings::EMOTICON_MASK) != 0) {
+    if (!settings->emoticon_.empty()) {
       type_ = Type::ChatTheme;
       theme_name_ = std::move(settings->emoticon_);
     } else {
@@ -412,13 +422,13 @@ BackgroundType::BackgroundType(bool has_no_file, bool is_pattern,
     type_ = Type::Pattern;
     if (settings != nullptr) {
       fill_ = BackgroundFill(settings.get());
-      is_moving_ = (settings->flags_ & telegram_api::wallPaperSettings::MOTION_MASK) != 0;
+      is_moving_ = settings->motion_;
     }
   } else {
     type_ = Type::Wallpaper;
     if (settings != nullptr) {
-      is_blurred_ = (settings->flags_ & telegram_api::wallPaperSettings::BLUR_MASK) != 0;
-      is_moving_ = (settings->flags_ & telegram_api::wallPaperSettings::MOTION_MASK) != 0;
+      is_blurred_ = settings->blur_;
+      is_moving_ = settings->motion_;
     }
   }
 }
@@ -461,12 +471,6 @@ td_api::object_ptr<td_api::BackgroundType> BackgroundType::get_background_type_o
 
 telegram_api::object_ptr<telegram_api::wallPaperSettings> BackgroundType::get_input_wallpaper_settings() const {
   int32 flags = 0;
-  if (is_blurred_) {
-    flags |= telegram_api::wallPaperSettings::BLUR_MASK;
-  }
-  if (is_moving_) {
-    flags |= telegram_api::wallPaperSettings::MOTION_MASK;
-  }
   switch (fill_.get_type()) {
     case BackgroundFill::Type::FreeformGradient:
       if (fill_.fourth_color_ != -1) {

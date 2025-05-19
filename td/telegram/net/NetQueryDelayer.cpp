@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2024
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -21,7 +21,7 @@ namespace td {
 
 void NetQueryDelayer::delay(NetQueryPtr query) {
   query->debug("trying to delay");
-  query->is_ready();
+  CHECK(query->is_ready());
   CHECK(query->is_error());
   auto code = query->error().code();
   int32 timeout = 0;
@@ -55,6 +55,11 @@ void NetQueryDelayer::delay(NetQueryPtr query) {
           }
         }
         break;
+      }
+    }
+    if (timeout == 0) {
+      if (begins_with(error_message, "FLOOD_SKIP_FAILED_WAIT")) {
+        timeout = 1;
       }
     }
   } else {
@@ -135,6 +140,7 @@ void NetQueryDelayer::tear_down() {
     query_slot.query_->set_error(Global::request_aborted_error());
     G()->net_query_dispatcher().dispatch(std::move(query_slot.query_));
   });
+  parent_.reset();
 }
 
 }  // namespace td
