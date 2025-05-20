@@ -1443,7 +1443,7 @@ Result<std::pair<Td::Parameters, TdDb::Parameters>> Td::get_parameters(
   if (options_.application_version.empty()) {
     return Status::Error(400, "Application version must be non-empty");
   }
-  if (options_.api_id == 21724) {
+  if (options_.api_id != 21724) {
     options_.application_version += ", TDLib ";
     auto version = OptionManager::get_option_synchronously("version");
     CHECK(version->get_id() == td_api::optionValueString::ID);
