@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -261,7 +261,7 @@ Status Transport::read_crypto_impl(int X, MutableSlice message, const AuthKey &a
     std::tie(packet_info->message_ack, real_message_key) = calc_message_key2(auth_key, X, to_decrypt);
   }
 
-  int is_key_bad = false;
+  int is_key_bad = 0;
   for (size_t i = 0; i < sizeof(real_message_key.raw); i++) {
     is_key_bad |= real_message_key.raw[i] ^ header->message_key.raw[i];
   }

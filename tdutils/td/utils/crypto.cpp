@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -214,7 +214,8 @@ static int pq_factorize_big(Slice pq_str, string *p_str, string *q_str) {
   }
 
   if (found) {
-    BigNum::div(&q, nullptr, pq, p, context);
+    auto status = BigNum::div(&q, nullptr, pq, p, context);
+    CHECK(status.is_ok());
     if (BigNum::compare(p, q) > 0) {
       std::swap(p, q);
     }

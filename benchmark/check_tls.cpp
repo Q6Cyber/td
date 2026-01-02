@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -213,7 +213,7 @@ td::Result<TlsInfo> test_tls(const td::string &url) {
             pos += 74;
             size_t extensions_length = read_length();
             if (extensions_length + 76 != server_hello_length) {
-              return td::Status::Error("Receive wrong extensions length");
+              return td::Status::Error("Receive wrong length of extensions");
             }
             while (pos < 5 + server_hello_length - 4) {
               info.extension_list.push_back(read_length());
@@ -224,7 +224,7 @@ td::Result<TlsInfo> test_tls(const td::string &url) {
               pos += extension_length;
             }
             if (pos != 5 + server_hello_length) {
-              return td::Status::Error("Receive wrong extensions list");
+              return td::Status::Error("Receive wrong list of extensions");
             }
           }
           if (pos == 5 + server_hello_length) {

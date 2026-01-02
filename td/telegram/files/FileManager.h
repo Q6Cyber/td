@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -838,7 +838,7 @@ class FileManager final : public Actor {
   FileIdInfo *get_file_id_info(FileId file_id);
 
   struct RemoteInfo {
-    // mutable is set to to enable changing of access hash
+    // mutable is used to allow changing of access hash
     mutable FullRemoteFileLocation remote_;
     mutable FileLocationSource file_location_source_;
     FileId file_id_;

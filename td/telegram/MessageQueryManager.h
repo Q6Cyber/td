@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -12,10 +12,12 @@
 #include "td/telegram/DialogId.h"
 #include "td/telegram/DialogListId.h"
 #include "td/telegram/files/FileUploadId.h"
+#include "td/telegram/ForumTopicId.h"
 #include "td/telegram/MessageFullId.h"
 #include "td/telegram/MessageId.h"
 #include "td/telegram/MessageSearchFilter.h"
 #include "td/telegram/MessageThreadInfo.h"
+#include "td/telegram/MessageTopic.h"
 #include "td/telegram/MessageViewer.h"
 #include "td/telegram/Photo.h"
 #include "td/telegram/SavedMessagesTopicId.h"
@@ -62,6 +64,9 @@ class MessageQueryManager final : public Actor {
 
   void report_message_delivery(MessageFullId message_full_id, int32 until_date, bool from_push);
 
+  void send_bot_requested_peer(MessageFullId message_full_id, int32 button_id, vector<DialogId> shared_dialog_ids,
+                               Promise<Unit> &&promise);
+
   void reload_message_extended_media(DialogId dialog_id, vector<MessageId> message_ids);
 
   void finish_get_message_extended_media(DialogId dialog_id, const vector<MessageId> &message_ids);
@@ -70,6 +75,9 @@ class MessageQueryManager final : public Actor {
 
   void set_message_fact_check(MessageFullId message_full_id, const FormattedText &fact_check_text,
                               Promise<Unit> &&promise);
+
+  void toggle_suggested_post_approval(MessageFullId message_full_id, bool is_rejected, int32 schedule_date,
+                                      const string &comment, Promise<Unit> &&promise);
 
   void search_messages(DialogListId dialog_list_id, bool ignore_folder_id, const string &query,
                        const string &offset_str, int32 limit, MessageSearchFilter filter,
@@ -88,6 +96,19 @@ class MessageQueryManager final : public Actor {
   void on_get_outgoing_document_messages(vector<telegram_api::object_ptr<telegram_api::Message>> &&messages,
                                          Promise<td_api::object_ptr<td_api::foundMessages>> &&promise);
 
+  void check_search_posts_flood(const string &query,
+                                Promise<td_api::object_ptr<td_api::publicPostSearchLimits>> promise);
+
+  void search_public_posts(const string &query, const string &offset_str, int32 limit, int64 star_count,
+                           Promise<td_api::object_ptr<td_api::foundPublicPosts>> &&promise);
+
+  void on_get_public_post_search_result(const string &hashtag, const MessageSearchOffset &old_offset, int32 limit,
+                                        int64 star_count,
+                                        telegram_api::object_ptr<telegram_api::searchPostsFlood> flood,
+                                        vector<telegram_api::object_ptr<telegram_api::Message>> &&messages,
+                                        int32 next_rate,
+                                        Promise<td_api::object_ptr<td_api::foundPublicPosts>> &&promise);
+
   void search_hashtag_posts(string hashtag, string offset_str, int32 limit,
                             Promise<td_api::object_ptr<td_api::foundMessages>> &&promise);
 
@@ -103,9 +124,9 @@ class MessageQueryManager final : public Actor {
                                vector<telegram_api::object_ptr<telegram_api::Message>> &&messages,
                                Promise<td_api::object_ptr<td_api::messages>> &&promise);
 
-  void get_dialog_message_position_from_server(DialogId dialog_id, MessageId message_id, MessageSearchFilter filter,
-                                               MessageId top_thread_message_id,
-                                               SavedMessagesTopicId saved_messages_topic_id, Promise<int32> &&promise);
+  void get_dialog_message_position_from_server(DialogId dialog_id, MessageTopic message_topic,
+                                               MessageSearchFilter filter, MessageId message_id,
+                                               Promise<int32> &&promise);
 
   void get_message_read_date_from_server(MessageFullId message_full_id,
                                          Promise<td_api::object_ptr<td_api::MessageReadDate>> &&promise);
@@ -126,8 +147,13 @@ class MessageQueryManager final : public Actor {
   bool has_message_pending_read_reactions(MessageFullId message_full_id) const;
 
   void get_paid_message_reaction_senders(DialogId dialog_id,
-                                         Promise<td_api::object_ptr<td_api::messageSenders>> &&promise,
-                                         bool is_recursive = false);
+                                         Promise<td_api::object_ptr<td_api::messageSenders>> &&promise);
+
+  void add_to_do_list_tasks(MessageFullId message_full_id,
+                            vector<td_api::object_ptr<td_api::inputChecklistTask>> &&tasks, Promise<Unit> &&promise);
+
+  void mark_to_do_list_tasks_as_done(MessageFullId message_full_id, vector<int32> done_task_ids,
+                                     vector<int32> not_done_task_ids, Promise<Unit> &&promise);
 
   void get_discussion_message(DialogId dialog_id, MessageId message_id, DialogId expected_dialog_id,
                               MessageId expected_message_id, Promise<MessageThreadInfo> &&promise);
@@ -140,16 +166,17 @@ class MessageQueryManager final : public Actor {
                                                    bool need_delete_all_messages, bool report_spam, uint64 log_event_id,
                                                    Promise<Unit> &&promise);
 
-  void delete_all_call_messages_on_server(bool revoke, uint64 log_event_id, Promise<Unit> &&promise);
+  void delete_dialog_messages_by_sender(DialogId dialog_id, DialogId sender_dialog_id, Promise<Unit> &&promise);
 
-  void delete_all_channel_messages_by_sender_on_server(ChannelId channel_id, DialogId sender_dialog_id,
-                                                       uint64 log_event_id, Promise<Unit> &&promise);
+  void delete_dialog_messages_by_date(DialogId dialog_id, int32 min_date, int32 max_date, bool revoke,
+                                      Promise<Unit> &&promise);
+
+  void delete_all_call_messages(bool revoke, Promise<Unit> &&promise);
 
   void delete_dialog_history_on_server(DialogId dialog_id, MessageId max_message_id, bool remove_from_dialog_list,
                                        bool revoke, bool allow_error, uint64 log_event_id, Promise<Unit> &&promise);
 
-  void delete_dialog_messages_by_date_on_server(DialogId dialog_id, int32 min_date, int32 max_date, bool revoke,
-                                                uint64 log_event_id, Promise<Unit> &&promise);
+  static Status fix_delete_message_min_max_dates(int32 &min_date, int32 &max_date);
 
   void delete_messages_on_server(DialogId dialog_id, vector<MessageId> message_ids, bool revoke, uint64 log_event_id,
                                  Promise<Unit> &&promise);
@@ -157,17 +184,17 @@ class MessageQueryManager final : public Actor {
   void delete_scheduled_messages_on_server(DialogId dialog_id, vector<MessageId> message_ids, uint64 log_event_id,
                                            Promise<Unit> &&promise);
 
-  void delete_topic_history_on_server(DialogId dialog_id, MessageId top_thread_message_id, uint64 log_event_id,
-                                      Promise<Unit> &&promise);
+  void delete_topic_history(DialogId dialog_id, ForumTopicId forum_topic_id, Promise<Unit> &&promise);
 
   void read_all_dialog_mentions_on_server(DialogId dialog_id, uint64 log_event_id, Promise<Unit> &&promise);
 
   void read_all_dialog_reactions_on_server(DialogId dialog_id, uint64 log_event_id, Promise<Unit> &&promise);
 
-  void read_all_topic_mentions_on_server(DialogId dialog_id, MessageId top_thread_message_id, uint64 log_event_id,
+  void read_all_topic_mentions_on_server(DialogId dialog_id, ForumTopicId forum_topic_id, uint64 log_event_id,
                                          Promise<Unit> &&promise);
 
-  void read_all_topic_reactions_on_server(DialogId dialog_id, MessageId top_thread_message_id, uint64 log_event_id,
+  void read_all_topic_reactions_on_server(DialogId dialog_id, ForumTopicId forum_topic_id,
+                                          SavedMessagesTopicId saved_messages_topic_id, uint64 log_event_id,
                                           Promise<Unit> &&promise);
 
   void read_message_contents_on_server(DialogId dialog_id, vector<MessageId> message_ids, uint64 log_event_id,
@@ -177,7 +204,8 @@ class MessageQueryManager final : public Actor {
 
   void unpin_all_dialog_messages_on_server(DialogId dialog_id, uint64 log_event_id, Promise<Unit> &&promise);
 
-  void unpin_all_topic_messages_on_server(DialogId dialog_id, MessageId top_thread_message_id, uint64 log_event_id,
+  void unpin_all_topic_messages_on_server(DialogId dialog_id, ForumTopicId forum_topic_id,
+                                          SavedMessagesTopicId saved_messages_topic_id, uint64 log_event_id,
                                           Promise<Unit> &&promise);
 
   void on_binlog_events(vector<BinlogEvent> &&events);
@@ -227,11 +255,25 @@ class MessageQueryManager final : public Actor {
 
   void on_read_message_reactions(DialogId dialog_id, vector<MessageId> &&message_ids, Result<Unit> &&result);
 
+  void do_get_paid_message_reaction_senders(DialogId dialog_id,
+                                            Promise<td_api::object_ptr<td_api::messageSenders>> &&promise);
+
   void process_discussion_message_impl(telegram_api::object_ptr<telegram_api::messages_discussionMessage> &&result,
                                        DialogId dialog_id, MessageId message_id, DialogId expected_dialog_id,
                                        MessageId expected_message_id, Promise<MessageThreadInfo> promise);
 
   void erase_delete_messages_log_event(uint64 log_event_id);
+
+  void delete_all_channel_messages_by_sender_on_server(ChannelId channel_id, DialogId sender_dialog_id,
+                                                       uint64 log_event_id, Promise<Unit> &&promise);
+
+  void delete_dialog_messages_by_date_on_server(DialogId dialog_id, int32 min_date, int32 max_date, bool revoke,
+                                                uint64 log_event_id, Promise<Unit> &&promise);
+
+  void delete_all_call_messages_on_server(bool revoke, uint64 log_event_id, Promise<Unit> &&promise);
+
+  void delete_topic_history_on_server(DialogId dialog_id, ForumTopicId forum_topic_id, uint64 log_event_id,
+                                      Promise<Unit> &&promise);
 
   static uint64 save_block_message_sender_from_replies_on_server_log_event(MessageId message_id,
                                                                            bool need_delete_message,
@@ -255,7 +297,7 @@ class MessageQueryManager final : public Actor {
   static uint64 save_delete_scheduled_messages_on_server_log_event(DialogId dialog_id,
                                                                    const vector<MessageId> &message_ids);
 
-  static uint64 save_delete_topic_history_on_server_log_event(DialogId dialog_id, MessageId top_thread_message_id);
+  static uint64 save_delete_topic_history_on_server_log_event(DialogId dialog_id, ForumTopicId forum_topic_id);
 
   static uint64 save_read_all_dialog_mentions_on_server_log_event(DialogId dialog_id);
 

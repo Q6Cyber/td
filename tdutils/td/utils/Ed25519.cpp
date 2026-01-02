@@ -1,5 +1,5 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -288,8 +288,7 @@ Result<SecureString> Ed25519::compute_shared_secret(const PublicKey &public_key,
 
   BigNum::mod_sub(y2, p, y2, p, context);
 
-  BigNum inverse_y_plus_1;
-  BigNum::mod_inverse(inverse_y_plus_1, y2, p, context);
+  TRY_RESULT(inverse_y_plus_1, BigNum::mod_inverse(y2, p, context));
 
   BigNum u;
   BigNum::mod_mul(u, y, inverse_y_plus_1, p, context);

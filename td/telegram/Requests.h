@@ -1,11 +1,12 @@
 //
-// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2025
+// Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov (arseny30@gmail.com) 2014-2026
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
 //
 #pragma once
 
+#include "td/telegram/SentEmailCode.h"
 #include "td/telegram/Td.h"
 #include "td/telegram/td_api.h"
 
@@ -98,6 +99,10 @@ class Requests {
 
   Promise<string> create_http_url_request_promise(uint64 id);
 
+  Promise<int32> create_count_request_promise(uint64 id);
+
+  Promise<SentEmailCode> create_sent_email_code_request_promise(uint64 id);
+
   template <class T>
   void on_request(uint64 id, const T &) = delete;
 
@@ -127,6 +132,10 @@ class Requests {
 
   void on_request(uint64 id, const td_api::requestQrCodeAuthentication &request);
 
+  void on_request(uint64 id, const td_api::getAuthenticationPasskeyParameters &request);
+
+  void on_request(uint64 id, td_api::checkAuthenticationPasskey &request);
+
   void on_request(uint64 id, const td_api::resetAuthenticationEmailAddress &request);
 
   void on_request(uint64 id, td_api::checkAuthenticationPassword &request);
@@ -154,6 +163,8 @@ class Requests {
   void on_request(uint64 id, const td_api::getPasswordState &request);
 
   void on_request(uint64 id, td_api::setPassword &request);
+
+  void on_request(uint64 id, const td_api::isLoginEmailAddressRequired &request);
 
   void on_request(uint64 id, td_api::setLoginEmailAddress &request);
 
@@ -271,6 +282,8 @@ class Requests {
 
   void on_request(uint64 id, const td_api::getMessageViewers &request);
 
+  void on_request(uint64 id, const td_api::getMessageAuthor &request);
+
   void on_request(uint64 id, const td_api::getMessages &request);
 
   void on_request(uint64 id, const td_api::getMessageProperties &request);
@@ -288,6 +301,14 @@ class Requests {
   void on_request(uint64 id, const td_api::openSponsoredChat &request);
 
   void on_request(uint64 id, const td_api::reportSponsoredChat &request);
+
+  void on_request(uint64 id, const td_api::getVideoMessageAdvertisements &request);
+
+  void on_request(uint64 id, const td_api::viewVideoMessageAdvertisement &request);
+
+  void on_request(uint64 id, const td_api::clickVideoMessageAdvertisement &request);
+
+  void on_request(uint64 id, const td_api::reportVideoMessageAdvertisement &request);
 
   void on_request(uint64 id, const td_api::getMessageLink &request);
 
@@ -354,6 +375,28 @@ class Requests {
   void on_request(uint64 id, const td_api::loadChats &request);
 
   void on_request(uint64 id, const td_api::getChats &request);
+
+  void on_request(uint64 id, const td_api::loadDirectMessagesChatTopics &request);
+
+  void on_request(uint64 id, const td_api::getDirectMessagesChatTopic &request);
+
+  void on_request(uint64 id, const td_api::getDirectMessagesChatTopicHistory &request);
+
+  void on_request(uint64 id, const td_api::getDirectMessagesChatTopicMessageByDate &request);
+
+  void on_request(uint64 id, const td_api::deleteDirectMessagesChatTopicHistory &request);
+
+  void on_request(uint64 id, const td_api::deleteDirectMessagesChatTopicMessagesByDate &request);
+
+  void on_request(uint64 id, const td_api::setDirectMessagesChatTopicIsMarkedAsUnread &request);
+
+  void on_request(uint64 id, const td_api::unpinAllDirectMessagesChatTopicMessages &request);
+
+  void on_request(uint64 id, const td_api::readAllDirectMessagesChatTopicReactions &request);
+
+  void on_request(uint64 id, const td_api::getDirectMessagesChatTopicRevenue &request);
+
+  void on_request(uint64 id, const td_api::toggleDirectMessagesChatTopicCanSendUnpaidMessages &request);
 
   void on_request(uint64 id, const td_api::loadSavedMessagesTopics &request);
 
@@ -441,6 +484,10 @@ class Requests {
 
   void on_request(uint64 id, td_api::searchOutgoingDocumentMessages &request);
 
+  void on_request(uint64 id, td_api::getPublicPostSearchLimits &request);
+
+  void on_request(uint64 id, td_api::searchPublicPosts &request);
+
   void on_request(uint64 id, td_api::searchPublicMessagesByTag &request);
 
   void on_request(uint64 id, td_api::searchPublicStoriesByTag &request);
@@ -468,6 +515,14 @@ class Requests {
   void on_request(uint64 id, const td_api::getChatMessagePosition &request);
 
   void on_request(uint64 id, const td_api::getChatScheduledMessages &request);
+
+  void on_request(uint64 id, const td_api::getPasskeyParameters &request);
+
+  void on_request(uint64 id, td_api::addLoginPasskey &request);
+
+  void on_request(uint64 id, const td_api::getLoginPasskeys &request);
+
+  void on_request(uint64 id, td_api::removeLoginPasskey &request);
 
   void on_request(uint64 id, const td_api::getEmojiReaction &request);
 
@@ -507,6 +562,24 @@ class Requests {
 
   void on_request(uint64 id, td_api::getStoryPublicForwards &request);
 
+  void on_request(uint64 id, const td_api::getChatStoryAlbums &request);
+
+  void on_request(uint64 id, const td_api::getStoryAlbumStories &request);
+
+  void on_request(uint64 id, td_api::createStoryAlbum &request);
+
+  void on_request(uint64 id, const td_api::reorderStoryAlbums &request);
+
+  void on_request(uint64 id, const td_api::deleteStoryAlbum &request);
+
+  void on_request(uint64 id, td_api::setStoryAlbumName &request);
+
+  void on_request(uint64 id, const td_api::addStoryAlbumStories &request);
+
+  void on_request(uint64 id, const td_api::removeStoryAlbumStories &request);
+
+  void on_request(uint64 id, const td_api::reorderStoryAlbumStories &request);
+
   void on_request(uint64 id, const td_api::removeNotification &request);
 
   void on_request(uint64 id, const td_api::removeNotificationGroup &request);
@@ -519,11 +592,11 @@ class Requests {
 
   void on_request(uint64 id, const td_api::readAllChatMentions &request);
 
-  void on_request(uint64 id, const td_api::readAllMessageThreadMentions &request);
+  void on_request(uint64 id, const td_api::readAllForumTopicMentions &request);
 
   void on_request(uint64 id, const td_api::readAllChatReactions &request);
 
-  void on_request(uint64 id, const td_api::readAllMessageThreadReactions &request);
+  void on_request(uint64 id, const td_api::readAllForumTopicReactions &request);
 
   void on_request(uint64 id, const td_api::getChatAvailableMessageSenders &request);
 
@@ -542,6 +615,8 @@ class Requests {
   void on_request(uint64 id, td_api::editMessageText &request);
 
   void on_request(uint64 id, td_api::editMessageLiveLocation &request);
+
+  void on_request(uint64 id, td_api::editMessageChecklist &request);
 
   void on_request(uint64 id, td_api::editMessageMedia &request);
 
@@ -570,6 +645,8 @@ class Requests {
   void on_request(uint64 id, td_api::editBusinessMessageText &request);
 
   void on_request(uint64 id, td_api::editBusinessMessageLiveLocation &request);
+
+  void on_request(uint64 id, td_api::editBusinessMessageChecklist &request);
 
   void on_request(uint64 id, td_api::editBusinessMessageMedia &request);
 
@@ -635,6 +712,8 @@ class Requests {
 
   void on_request(uint64 id, td_api::postStory &request);
 
+  void on_request(uint64 id, td_api::startLiveStory &request);
+
   void on_request(uint64 id, td_api::editStory &request);
 
   void on_request(uint64 id, const td_api::editStoryCover &request);
@@ -656,6 +735,8 @@ class Requests {
   void on_request(uint64 id, td_api::editForumTopic &request);
 
   void on_request(uint64 id, const td_api::getForumTopic &request);
+
+  void on_request(uint64 id, const td_api::getForumTopicHistory &request);
 
   void on_request(uint64 id, const td_api::getForumTopicLink &request);
 
@@ -682,6 +763,8 @@ class Requests {
   void on_request(uint64 id, const td_api::deleteChatReplyMarkup &request);
 
   void on_request(uint64 id, td_api::sendChatAction &request);
+
+  void on_request(uint64 id, td_api::sendTextMessageDraft &request);
 
   void on_request(uint64 id, td_api::forwardMessages &request);
 
@@ -733,6 +816,10 @@ class Requests {
 
   void on_request(uint64 id, const td_api::replaceVideoChatRtmpUrl &request);
 
+  void on_request(uint64 id, const td_api::getLiveStoryRtmpUrl &request);
+
+  void on_request(uint64 id, const td_api::replaceLiveStoryRtmpUrl &request);
+
   void on_request(uint64 id, const td_api::getGroupCall &request);
 
   void on_request(uint64 id, const td_api::startScheduledVideoChat &request);
@@ -743,6 +830,8 @@ class Requests {
 
   void on_request(uint64 id, td_api::joinVideoChat &request);
 
+  void on_request(uint64 id, td_api::joinLiveStory &request);
+
   void on_request(uint64 id, td_api::startGroupCallScreenSharing &request);
 
   void on_request(uint64 id, const td_api::endGroupCallScreenSharing &request);
@@ -750,6 +839,30 @@ class Requests {
   void on_request(uint64 id, td_api::setVideoChatTitle &request);
 
   void on_request(uint64 id, const td_api::toggleVideoChatMuteNewParticipants &request);
+
+  void on_request(uint64 id, const td_api::toggleGroupCallAreMessagesAllowed &request);
+
+  void on_request(uint64 id, const td_api::setGroupCallPaidMessageStarCount &request);
+
+  void on_request(uint64 id, const td_api::getLiveStoryStreamer &request);
+
+  void on_request(uint64 id, const td_api::getLiveStoryAvailableMessageSenders &request);
+
+  void on_request(uint64 id, const td_api::setLiveStoryMessageSender &request);
+
+  void on_request(uint64 id, td_api::sendGroupCallMessage &request);
+
+  void on_request(uint64 id, const td_api::addPendingLiveStoryReaction &request);
+
+  void on_request(uint64 id, const td_api::commitPendingLiveStoryReactions &request);
+
+  void on_request(uint64 id, const td_api::removePendingLiveStoryReactions &request);
+
+  void on_request(uint64 id, const td_api::deleteGroupCallMessages &request);
+
+  void on_request(uint64 id, const td_api::deleteGroupCallMessagesBySender &request);
+
+  void on_request(uint64 id, const td_api::getLiveStoryTopDonors &request);
 
   void on_request(uint64 id, const td_api::revokeGroupCallInviteLink &request);
 
@@ -789,9 +902,9 @@ class Requests {
 
   void on_request(uint64 id, const td_api::endGroupCall &request);
 
-  void on_request(uint64 id, const td_api::getVideoChatStreams &request);
+  void on_request(uint64 id, const td_api::getGroupCallStreams &request);
 
-  void on_request(uint64 id, td_api::getVideoChatStreamSegment &request);
+  void on_request(uint64 id, td_api::getGroupCallStreamSegment &request);
 
   void on_request(uint64 id, td_api::encryptGroupCallData &request);
 
@@ -877,6 +990,8 @@ class Requests {
 
   void on_request(uint64 id, const td_api::deleteChatBackground &request);
 
+  void on_request(uint64 id, td_api::getGiftChatThemes &request);
+
   void on_request(uint64 id, td_api::setChatTheme &request);
 
   void on_request(uint64 id, td_api::setChatDraftMessage &request);
@@ -955,6 +1070,8 @@ class Requests {
 
   void on_request(uint64 id, const td_api::setChatDiscussionGroup &request);
 
+  void on_request(uint64 id, const td_api::setChatDirectMessagesGroup &request);
+
   void on_request(uint64 id, td_api::setChatLocation &request);
 
   void on_request(uint64 id, const td_api::setChatSlowModeDelay &request);
@@ -965,7 +1082,7 @@ class Requests {
 
   void on_request(uint64 id, const td_api::unpinAllChatMessages &request);
 
-  void on_request(uint64 id, const td_api::unpinAllMessageThreadMessages &request);
+  void on_request(uint64 id, const td_api::unpinAllForumTopicMessages &request);
 
   void on_request(uint64 id, const td_api::joinChat &request);
 
@@ -1012,6 +1129,12 @@ class Requests {
   void on_request(uint64 id, const td_api::processChatJoinRequest &request);
 
   void on_request(uint64 id, td_api::processChatJoinRequests &request);
+
+  void on_request(uint64 id, const td_api::approveSuggestedPost &request);
+
+  void on_request(uint64 id, td_api::declineSuggestedPost &request);
+
+  void on_request(uint64 id, td_api::addOffer &request);
 
   void on_request(uint64 id, td_api::revokeChatInviteLink &request);
 
@@ -1097,7 +1220,11 @@ class Requests {
 
   void on_request(uint64 id, const td_api::setUserPersonalProfilePhoto &request);
 
+  void on_request(uint64 id, td_api::setUserNote &request);
+
   void on_request(uint64 id, const td_api::suggestUserProfilePhoto &request);
+
+  void on_request(uint64 id, const td_api::suggestUserBirthdate &request);
 
   void on_request(uint64 id, const td_api::toggleBotCanManageEmojiStatus &request);
 
@@ -1121,7 +1248,9 @@ class Requests {
 
   void on_request(uint64 id, td_api::reorderActiveUsernames &request);
 
-  void on_request(uint64 id, td_api::setBirthdate &request);
+  void on_request(uint64 id, const td_api::setBirthdate &request);
+
+  void on_request(uint64 id, const td_api::setMainProfileTab &request);
 
   void on_request(uint64 id, const td_api::setPersonalChat &request);
 
@@ -1213,7 +1342,19 @@ class Requests {
 
   void on_request(uint64 id, const td_api::getUserProfilePhotos &request);
 
+  void on_request(uint64 id, const td_api::getUserProfileAudios &request);
+
+  void on_request(uint64 id, const td_api::isProfileAudio &request);
+
+  void on_request(uint64 id, const td_api::addProfileAudio &request);
+
+  void on_request(uint64 id, const td_api::setProfileAudioPosition &request);
+
+  void on_request(uint64 id, const td_api::removeProfileAudio &request);
+
   void on_request(uint64 id, const td_api::setAccentColor &request);
+
+  void on_request(uint64 id, const td_api::setUpgradedGiftColors &request);
 
   void on_request(uint64 id, const td_api::setProfileAccentColor &request);
 
@@ -1251,6 +1392,8 @@ class Requests {
 
   void on_request(uint64 id, const td_api::setSupergroupUnrestrictBoostCount &request);
 
+  void on_request(uint64 id, const td_api::setSupergroupMainProfileTab &request);
+
   void on_request(uint64 id, const td_api::toggleSupergroupSignMessages &request);
 
   void on_request(uint64 id, const td_api::toggleSupergroupJoinToSendMessages &request);
@@ -1275,11 +1418,13 @@ class Requests {
 
   void on_request(uint64 id, const td_api::reportSupergroupAntiSpamFalsePositive &request);
 
-  void on_request(uint64 id, td_api::getSupergroupMembers &request);
+  void on_request(uint64 id, const td_api::getSupergroupMembers &request);
 
   void on_request(uint64 id, const td_api::closeSecretChat &request);
 
   void on_request(uint64 id, const td_api::getStickerOutline &request);
+
+  void on_request(uint64 id, const td_api::getStickerOutlineSvgPath &request);
 
   void on_request(uint64 id, td_api::getStickers &request);
 
@@ -1425,13 +1570,19 @@ class Requests {
 
   void on_request(uint64 id, const td_api::getChatRevenueWithdrawalUrl &request);
 
-  void on_request(uint64 id, const td_api::getChatRevenueTransactions &request);
+  void on_request(uint64 id, td_api::getChatRevenueTransactions &request);
+
+  void on_request(uint64 id, td_api::getTonTransactions &request);
 
   void on_request(uint64 id, const td_api::getStarRevenueStatistics &request);
 
   void on_request(uint64 id, const td_api::getStarWithdrawalUrl &request);
 
   void on_request(uint64 id, const td_api::getStarAdAccountUrl &request);
+
+  void on_request(uint64 id, const td_api::getTonRevenueStatistics &request);
+
+  void on_request(uint64 id, const td_api::getTonWithdrawalUrl &request);
 
   void on_request(uint64 id, const td_api::getMessageStatistics &request);
 
@@ -1468,6 +1619,10 @@ class Requests {
   void on_request(uint64 id, const td_api::getPollVoters &request);
 
   void on_request(uint64 id, td_api::stopPoll &request);
+
+  void on_request(uint64 id, td_api::addChecklistTasks &request);
+
+  void on_request(uint64 id, td_api::markChecklistTasksAsDone &request);
 
   void on_request(uint64 id, td_api::hideSuggestedAction &request);
 
@@ -1541,7 +1696,21 @@ class Requests {
 
   void on_request(uint64 id, const td_api::getAvailableGifts &request);
 
+  void on_request(uint64 id, const td_api::canSendGift &request);
+
   void on_request(uint64 id, td_api::sendGift &request);
+
+  void on_request(uint64 id, td_api::getGiftAuctionState &request);
+
+  void on_request(uint64 id, const td_api::getGiftAuctionAcquiredGifts &request);
+
+  void on_request(uint64 id, const td_api::openGiftAuction &request);
+
+  void on_request(uint64 id, const td_api::closeGiftAuction &request);
+
+  void on_request(uint64 id, td_api::placeGiftAuctionBid &request);
+
+  void on_request(uint64 id, const td_api::increaseGiftAuctionBid &request);
 
   void on_request(uint64 id, td_api::sellGift &request);
 
@@ -1553,11 +1722,21 @@ class Requests {
 
   void on_request(uint64 id, const td_api::getGiftUpgradePreview &request);
 
+  void on_request(uint64 id, const td_api::getGiftUpgradeVariants &request);
+
   void on_request(uint64 id, td_api::upgradeGift &request);
+
+  void on_request(uint64 id, td_api::buyGiftUpgrade &request);
 
   void on_request(uint64 id, td_api::transferGift &request);
 
+  void on_request(uint64 id, const td_api::dropGiftOriginalDetails &request);
+
   void on_request(uint64 id, td_api::sendResoldGift &request);
+
+  void on_request(uint64 id, td_api::sendGiftPurchaseOffer &request);
+
+  void on_request(uint64 id, const td_api::processGiftPurchaseOffer &request);
 
   void on_request(uint64 id, td_api::getReceivedGifts &request);
 
@@ -1565,11 +1744,31 @@ class Requests {
 
   void on_request(uint64 id, td_api::getUpgradedGift &request);
 
+  void on_request(uint64 id, td_api::getUpgradedGiftValueInfo &request);
+
   void on_request(uint64 id, const td_api::getUpgradedGiftWithdrawalUrl &request);
 
-  void on_request(uint64 id, const td_api::setGiftResalePrice &request);
+  void on_request(uint64 id, const td_api::getUpgradedGiftsPromotionalAnimation &request);
+
+  void on_request(uint64 id, td_api::setGiftResalePrice &request);
 
   void on_request(uint64 id, td_api::searchGiftsForResale &request);
+
+  void on_request(uint64 id, const td_api::getGiftCollections &request);
+
+  void on_request(uint64 id, td_api::createGiftCollection &request);
+
+  void on_request(uint64 id, const td_api::reorderGiftCollections &request);
+
+  void on_request(uint64 id, const td_api::deleteGiftCollection &request);
+
+  void on_request(uint64 id, td_api::setGiftCollectionName &request);
+
+  void on_request(uint64 id, const td_api::addGiftCollectionGifts &request);
+
+  void on_request(uint64 id, const td_api::removeGiftCollectionGifts &request);
+
+  void on_request(uint64 id, const td_api::reorderGiftCollectionGifts &request);
 
   void on_request(uint64 id, td_api::createInvoiceLink &request);
 
