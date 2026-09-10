@@ -13,6 +13,7 @@
 #include "td/telegram/ChannelId.h"
 #include "td/telegram/ChannelType.h"
 #include "td/telegram/ChatId.h"
+#include "td/telegram/CommunityId.h"
 #include "td/telegram/CustomEmojiId.h"
 #include "td/telegram/DialogId.h"
 #include "td/telegram/DialogInviteLink.h"
@@ -71,8 +72,6 @@ class ChatManager final : public Actor {
   ChatManager &operator=(ChatManager &&) = delete;
   ~ChatManager() final;
 
-  static ChatId get_chat_id(const tl_object_ptr<telegram_api::Chat> &chat);
-  static ChannelId get_channel_id(const tl_object_ptr<telegram_api::Chat> &chat);
   static DialogId get_dialog_id(const tl_object_ptr<telegram_api::Chat> &chat);
 
   vector<ChannelId> get_channel_ids(vector<tl_object_ptr<telegram_api::Chat>> &&chats, const char *source);
@@ -154,6 +153,7 @@ class ChatManager final : public Actor {
   void on_update_chat_add_user(ChatId chat_id, UserId inviter_user_id, UserId user_id, int32 date, int32 version);
   void on_update_chat_description(ChatId chat_id, string &&description);
   void on_update_chat_edit_administrator(ChatId chat_id, UserId user_id, bool is_administrator, int32 version);
+  void on_update_chat_participant_rank(ChatId chat_id, UserId user_id, string &&rank, int32 version);
   void on_update_chat_delete_user(ChatId chat_id, UserId user_id, int32 version);
   void on_update_chat_default_permissions(ChatId chat_id, RestrictedRights default_permissions, int32 version);
   void on_update_chat_pinned_message(ChatId chat_id, MessageId pinned_message_id, int32 version);
@@ -174,6 +174,7 @@ class ChatManager final : public Actor {
   void on_update_channel_unrestrict_boost_count(ChannelId channel_id, int32 unrestrict_boost_count);
   void on_update_channel_gift_count(ChannelId channel_id, int32 gift_count, bool is_added);
   void on_update_channel_linked_channel_id(ChannelId channel_id, ChannelId group_channel_id);
+  void on_update_channel_linked_community_id(ChannelId channel_id, CommunityId linked_community_id);
   void on_update_channel_location(ChannelId channel_id, const DialogLocation &location);
   void on_update_channel_slow_mode_delay(ChannelId channel_id, int32 slow_mode_delay, Promise<Unit> &&promise);
   void on_update_channel_slow_mode_next_send_date(ChannelId channel_id, int32 slow_mode_next_send_date);
@@ -189,6 +190,7 @@ class ChatManager final : public Actor {
   void on_update_channel_default_permissions(ChannelId channel_id, RestrictedRights default_permissions);
   void on_update_channel_administrator_count(ChannelId channel_id, int32 administrator_count);
   void on_update_channel_bot_commands(ChannelId channel_id, BotCommands &&bot_commands);
+  void on_update_channel_guard_bot_user_id(ChannelId channel_id, UserId guard_bot_user_id);
   void on_update_channel_permanent_invite_link(ChannelId channel_id, const DialogInviteLink &invite_link);
 
   void speculative_add_channel_participants(ChannelId channel_id, const vector<UserId> &added_user_ids,
@@ -267,7 +269,8 @@ class ChatManager final : public Actor {
 
   void toggle_channel_join_to_send(ChannelId channel_id, bool joint_to_send, Promise<Unit> &&promise);
 
-  void toggle_channel_join_request(ChannelId channel_id, bool join_request, Promise<Unit> &&promise);
+  void toggle_channel_join_request(ChannelId channel_id, bool join_request, UserId guard_bot_user_id,
+                                   bool apply_to_invite_links, Promise<Unit> &&promise);
 
   void toggle_channel_is_all_history_available(ChannelId channel_id, bool is_all_history_available,
                                                Promise<Unit> &&promise);
@@ -362,6 +365,7 @@ class ChatManager final : public Actor {
   bool have_channel_force(ChannelId channel_id, const char *source);
   bool get_channel(ChannelId channel_id, int left_tries, Promise<Unit> &&promise);
   void reload_channel(ChannelId channel_id, Promise<Unit> &&promise, const char *source);
+
   void load_channel_full(ChannelId channel_id, bool force, Promise<Unit> &&promise, const char *source);
   FileSourceId get_channel_full_file_source_id(ChannelId channel_id);
   void reload_channel_full(ChannelId channel_id, Promise<Unit> &&promise, const char *source);
@@ -407,7 +411,7 @@ class ChatManager final : public Actor {
 
   td_api::object_ptr<td_api::supergroup> get_supergroup_object(ChannelId channel_id) const;
 
-  tl_object_ptr<td_api::supergroupFullInfo> get_supergroup_full_info_object(ChannelId channel_id) const;
+  td_api::object_ptr<td_api::supergroupFullInfo> get_supergroup_full_info_object(ChannelId channel_id) const;
 
   tl_object_ptr<td_api::chatMember> get_chat_member_object(const DialogParticipant &dialog_participant,
                                                            const char *source) const;
@@ -427,11 +431,10 @@ class ChatManager final : public Actor {
     int32 pinned_message_version = -1;
     ChannelId migrated_to_channel_id;
 
-    DialogParticipantStatus status = DialogParticipantStatus::Banned(0);
-    RestrictedRights default_permissions{false, false, false, false, false, false, false, false, false,
-                                         false, false, false, false, false, false, false, false, ChannelType::Unknown};
+    DialogParticipantStatus status = DialogParticipantStatus::Banned(0, string());
+    RestrictedRights default_permissions = RestrictedRights::restrict_all();
 
-    static constexpr uint32 CACHE_VERSION = 4;
+    static constexpr uint32 CACHE_VERSION = 5;
     uint32 cache_version = 0;
 
     bool is_active = false;
@@ -507,9 +510,8 @@ class ChatManager final : public Actor {
     CustomEmojiId profile_background_custom_emoji_id;
     Usernames usernames;
     vector<RestrictionReason> restriction_reasons;
-    DialogParticipantStatus status = DialogParticipantStatus::Banned(0);
-    RestrictedRights default_permissions{false, false, false, false, false, false, false, false, false,
-                                         false, false, false, false, false, false, false, false, ChannelType::Unknown};
+    DialogParticipantStatus status = DialogParticipantStatus::Banned(0, string());
+    RestrictedRights default_permissions = RestrictedRights::restrict_all();
     int32 date = 0;
     int32 participant_count = 0;
     int32 boost_level = 0;
@@ -521,8 +523,9 @@ class ChatManager final : public Actor {
     StoryId max_read_story_id;
 
     ChannelId monoforum_channel_id;
+    CommunityId linked_community_id;
 
-    static constexpr uint32 CACHE_VERSION = 10;
+    static constexpr uint32 CACHE_VERSION = 11;
     uint32 cache_version = 0;
 
     bool has_linked_channel = false;
@@ -605,6 +608,7 @@ class ChatManager final : public Actor {
 
     vector<BotCommands> bot_commands;
     unique_ptr<BotVerification> bot_verification;
+    UserId guard_bot_user_id;
 
     uint32 speculative_version = 1;
     uint32 repair_request_version = 0;
@@ -614,6 +618,7 @@ class ChatManager final : public Actor {
 
     ChannelId linked_channel_id;
     ChannelId monoforum_channel_id;
+    CommunityId linked_community_id;
 
     DialogLocation location;
 
@@ -647,6 +652,7 @@ class ChatManager final : public Actor {
     bool has_stargifts_available = false;
     bool has_paid_messages_available = false;
 
+    bool is_photo_changed = true;
     bool is_slow_mode_next_send_date_changed = true;
     bool is_being_updated = false;
     bool is_changed = true;             // have new changes that need to be sent to the client and database
@@ -676,6 +682,10 @@ class ChatManager final : public Actor {
 
   static constexpr int32 CHANNEL_FULL_EXPIRE_TIME = 60;
 
+  static ChatId get_chat_id(const tl_object_ptr<telegram_api::Chat> &chat);
+
+  static ChannelId get_channel_id(const tl_object_ptr<telegram_api::Chat> &chat);
+
   static bool have_input_peer_chat(const Chat *c, AccessRights access_rights);
 
   bool have_input_peer_channel(const Channel *c, ChannelId channel_id, AccessRights access_rights,
@@ -701,10 +711,10 @@ class ChatManager final : public Actor {
 
   Channel *add_channel(ChannelId channel_id, const char *source);
 
-  const ChannelFull *get_channel_full(ChannelId channel_id) const;
   const ChannelFull *get_channel_full_const(ChannelId channel_id) const;
   ChannelFull *get_channel_full(ChannelId channel_id, bool only_local, const char *source);
-  ChannelFull *get_channel_full_force(ChannelId channel_id, bool only_local, const char *source);
+  ChannelFull *get_channel_full_force(ChannelId channel_id, bool only_local, const char *source,
+                                      bool is_recursive = false);
 
   ChannelFull *add_channel_full(ChannelId channel_id);
 
@@ -777,6 +787,8 @@ class ChatManager final : public Actor {
                                                 ChannelId linked_channel_id);
   void on_update_channel_full_monoforum_channel_id(ChannelFull *channel_full, ChannelId channel_id,
                                                    ChannelId monoforum_channel_id);
+  void on_update_channel_full_linked_community_id(ChannelFull *channel_full, ChannelId channel_id,
+                                                  CommunityId linked_community_id);
   void on_update_channel_full_location(ChannelFull *channel_full, ChannelId channel_id, const DialogLocation &location);
   void on_update_channel_full_slow_mode_delay(ChannelFull *channel_full, ChannelId channel_id, int32 slow_mode_delay,
                                               int32 slow_mode_next_send_date);
@@ -784,6 +796,7 @@ class ChatManager final : public Actor {
                                                               int32 slow_mode_next_send_date);
   static void on_update_channel_full_bot_user_ids(ChannelFull *channel_full, ChannelId channel_id,
                                                   vector<UserId> &&bot_user_ids);
+  void on_update_channel_full_guard_bot_user_id(ChannelFull *channel_full, UserId guard_bot_user_id) const;
 
   void on_set_channel_main_profile_tab(ChannelId channel_id, ProfileTab main_profile_tab, Promise<Unit> &&promise);
 
@@ -840,7 +853,7 @@ class ChatManager final : public Actor {
   static void save_channel_full(const ChannelFull *channel_full, ChannelId channel_id);
   static string get_channel_full_database_key(ChannelId channel_id);
   static string get_channel_full_database_value(const ChannelFull *channel_full);
-  void on_load_channel_full_from_database(ChannelId channel_id, string value, const char *source);
+  void on_load_channel_full_from_database(ChannelId channel_id, string value, const char *source, bool is_recursive);
 
   void update_chat(Chat *c, ChatId chat_id, bool from_binlog = false, bool from_database = false);
   void update_channel(Channel *c, ChannelId channel_id, bool from_binlog = false, bool from_database = false);
@@ -859,8 +872,8 @@ class ChatManager final : public Actor {
 
   static bool is_suitable_created_public_channel(PublicDialogType type, const Channel *c);
 
-  static void return_created_public_dialogs(Promise<td_api::object_ptr<td_api::chats>> &&promise,
-                                            const vector<ChannelId> &channel_ids);
+  void return_created_public_dialogs(Promise<td_api::object_ptr<td_api::chats>> &&promise,
+                                     const vector<ChannelId> &channel_ids);
 
   void finish_get_created_public_dialogs(PublicDialogType type, Result<Unit> &&result);
 
@@ -904,8 +917,12 @@ class ChatManager final : public Actor {
 
   Status can_toggle_channel_aggressive_anti_spam(ChannelId channel_id, const ChannelFull *channel_full) const;
 
-  tl_object_ptr<td_api::supergroupFullInfo> get_supergroup_full_info_object(ChannelId channel_id,
-                                                                            const ChannelFull *channel_full) const;
+  td_api::object_ptr<td_api::supergroupFullInfo> get_supergroup_full_info_object(ChannelId channel_id,
+                                                                                 const ChannelFull *channel_full,
+                                                                                 const Channel *c) const;
+
+  td_api::object_ptr<td_api::updateSupergroupFullInfo> get_update_supergroup_full_info_object(
+      ChannelId channel_id, const ChannelFull *channel_full, const char *source) const;
 
   vector<DialogId> get_dialog_ids(vector<tl_object_ptr<telegram_api::Chat>> &&chats, const char *source);
 

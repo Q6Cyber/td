@@ -141,7 +141,7 @@ class NotificationTypePushMessage final : public NotificationType {
   }
 
   vector<FileId> get_file_ids(const Td *td) const final {
-    if (!document_.empty()) {
+    if (!document_.is_empty()) {
       return document_.get_file_ids(td);
     }
 
@@ -339,6 +339,9 @@ class NotificationTypePushMessage final : public NotificationType {
         }
         if (key == "MESSAGE_POLL") {
           return td_api::make_object<td_api::pushMessageContentPoll>(arg, true, is_pinned);
+        }
+        if (key == "MESSAGE_POLL_APPEND") {
+          return td_api::make_object<td_api::pushMessageContentPollOptionAdded>(arg);
         }
         if (key == "MESSAGE_PROXIMITY") {
           return td_api::make_object<td_api::pushMessageContentProximityAlertTriggered>(to_integer<int32>(arg));

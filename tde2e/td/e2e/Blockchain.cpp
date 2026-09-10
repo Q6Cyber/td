@@ -185,7 +185,7 @@ Block Block::from_tl(const e2e::e2e_chain_block &block) {
   }
   result.signature_ = Signature::from_u512(block.signature_);
   result.prev_block_hash_ = block.prev_block_hash_;
-  auto change_from_tl = [&](auto &obj) {
+  auto change_from_tl = [](auto &obj) {
     return Change::from_tl(*obj);
   };
   result.changes_ = td::transform(block.changes_, change_from_tl);
@@ -761,7 +761,7 @@ td::Result<std::string> Blockchain::from_local_to_server(std::string block) {
   return block;
 }
 
-td::Result<ClientBlockchain> ClientBlockchain::create_from_block(td::Slice block_slice, const PublicKey &public_key) {
+td::Result<ClientBlockchain> ClientBlockchain::create_from_block(td::Slice block_slice) {
   TRY_RESULT(block, Block::from_tl_serialized(block_slice));
   TRY_RESULT(blockchain, Blockchain::create_from_block(std::move(block)));
   ClientBlockchain res;

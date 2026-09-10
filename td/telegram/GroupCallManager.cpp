@@ -1813,6 +1813,7 @@ class GroupCallManager::GroupCallMessages {
 };
 
 struct GroupCallManager::GroupCall {
+  InputGroupCallId input_group_call_id;
   GroupCallId group_call_id;
   DialogId dialog_id;
   string title;
@@ -2304,6 +2305,7 @@ GroupCallManager::GroupCall *GroupCallManager::add_group_call(InputGroupCallId i
   auto &group_call = group_calls_[input_group_call_id];
   if (group_call == nullptr) {
     group_call = make_unique<GroupCall>();
+    group_call->input_group_call_id = input_group_call_id;
     group_call->group_call_id = get_next_group_call_id(input_group_call_id);
     LOG(INFO) << "Add " << input_group_call_id << " from " << dialog_id << " as " << group_call->group_call_id;
   }
@@ -3599,7 +3601,7 @@ void GroupCallManager::remove_group_call_spent_stars(InputGroupCallId input_grou
       send_update_live_story_top_donors(group_call->group_call_id, group_call_participants);
     }
   }
-  // don't neet to undo updateNewGroupCallPaidReaction
+  // don't need to undo updateNewGroupCallPaidReaction
 }
 
 int32 GroupCallManager::add_group_call_message(InputGroupCallId input_group_call_id, GroupCall *group_call,
@@ -5936,6 +5938,7 @@ void GroupCallManager::send_group_call_message(GroupCallId group_call_id,
         c = ' ';
       }
     }
+    remove_unallowed_quote_user_entities(message, true, true);
   } else {
     if (paid_message_star_count != 0) {
       if (is_reaction) {
@@ -5946,6 +5949,8 @@ void GroupCallManager::send_group_call_message(GroupCallId group_call_id,
     if (static_cast<int64>(utf8_length(message.text)) > G()->get_option_integer("group_call_message_text_length_max")) {
       return promise.set_error(400, "Message is too long");
     }
+    td::remove_if(message.entities,
+                  [](const MessageEntity &entity) { return entity.type == MessageEntity::Type::FormattedDate; });
   }
 
   auto as_dialog_id =
@@ -6321,6 +6326,7 @@ void GroupCallManager::get_group_call_stars(GroupCallId group_call_id,
 
 void GroupCallManager::get_group_call_stars_from_server(
     InputGroupCallId input_group_call_id, Promise<td_api::object_ptr<td_api::liveStoryDonors>> &&promise) {
+  CHECK(input_group_call_id != InputGroupCallId());
   auto &queries = get_stars_queries_[input_group_call_id];
   queries.push_back(std::move(promise));
   if (queries.size() != 1u) {
@@ -6555,17 +6561,10 @@ void GroupCallManager::invite_group_call_participants(GroupCallId group_call_id,
     return promise.set_error(400, "The call is not a video chat");
   }
 
-  vector<telegram_api::object_ptr<telegram_api::InputUser>> input_users;
-  auto my_user_id = td_->user_manager_->get_my_id();
-  for (auto user_id : user_ids) {
-    TRY_RESULT_PROMISE(promise, input_user, td_->user_manager_->get_input_user(user_id));
+  // can't invite self
+  td::remove(user_ids, td_->user_manager_->get_my_id());
 
-    if (user_id == my_user_id) {
-      // can't invite self
-      continue;
-    }
-    input_users.push_back(std::move(input_user));
-  }
+  TRY_RESULT_PROMISE(promise, input_users, td_->user_manager_->get_input_users(user_ids));
 
   if (input_users.empty()) {
     return promise.set_value(Unit());
@@ -7137,7 +7136,7 @@ void GroupCallManager::leave_group_call(GroupCallId group_call_id, Promise<Unit>
       bool old_is_joined = get_group_call_is_joined(group_call);
       if (cancel_join_group_call_request(input_group_call_id, group_call) != 0) {
         if (try_clear_group_call_participants(input_group_call_id) ||
-            old_is_joined != get_group_call_is_joined(group_call)) {
+            (old_is_joined != get_group_call_is_joined(group_call) && group_call->is_inited)) {
           send_update_group_call(group_call, "leave_group_call 1");
         }
         process_group_call_after_join_requests(input_group_call_id, "leave_group_call 1");
@@ -8229,9 +8228,9 @@ td_api::object_ptr<td_api::groupCall> GroupCallManager::get_group_call_object(
     message_sender_id = get_message_sender_object(td, group_call->message_sender_dialog_id, "groupCall");
   }
   return td_api::make_object<td_api::groupCall>(
-      group_call->group_call_id.get(), get_group_call_title(group_call), group_call->invite_link,
-      paid_message_star_count, scheduled_start_date, start_subscribed, is_active,
-      !group_call->is_conference && !group_call->is_live_story, group_call->is_live_story,
+      group_call->group_call_id.get(), group_call->input_group_call_id.get_group_call_id(),
+      get_group_call_title(group_call), group_call->invite_link, paid_message_star_count, scheduled_start_date,
+      start_subscribed, is_active, !group_call->is_conference && !group_call->is_live_story, group_call->is_live_story,
       !group_call->is_conference && group_call->is_rtmp_stream, is_joined, group_call->need_rejoin,
       group_call->is_creator && !group_call->is_live_story, group_call->can_be_managed, group_call->participant_count,
       group_call->has_hidden_listeners || group_call->is_live_story,

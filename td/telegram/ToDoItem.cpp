@@ -12,7 +12,6 @@
 #include "td/telegram/OptionManager.h"
 #include "td/telegram/Td.h"
 
-#include "td/utils/algorithm.h"
 #include "td/utils/logging.h"
 #include "td/utils/misc.h"
 #include "td/utils/SliceBuilder.h"
@@ -20,11 +19,12 @@
 
 namespace td {
 
-ToDoItem::ToDoItem(const UserManager *user_manager, telegram_api::object_ptr<telegram_api::todoItem> &&item) {
+ToDoItem::ToDoItem(const UserManager *user_manager, telegram_api::object_ptr<telegram_api::todoItem> &&item,
+                   int32 message_date) {
   CHECK(item != nullptr);
   id_ = item->id_;
   title_ = get_formatted_text(user_manager, std::move(item->title_), true, true, "ToDoItem");
-  validate("telegram_api::todoItem");
+  validate(message_date, "telegram_api::todoItem");
 }
 
 Result<ToDoItem> ToDoItem::get_to_do_item(const Td *td, DialogId dialog_id,
@@ -55,29 +55,11 @@ telegram_api::object_ptr<telegram_api::todoItem> ToDoItem::get_input_todo_item(c
 }
 
 bool ToDoItem::remove_unsupported_entities(FormattedText &text) {
-  return td::remove_if(text.entities, [&](const MessageEntity &entity) {
-    switch (entity.type) {
-      case MessageEntity::Type::Bold:
-      case MessageEntity::Type::Italic:
-      case MessageEntity::Type::Underline:
-      case MessageEntity::Type::Strikethrough:
-      case MessageEntity::Type::Spoiler:
-      case MessageEntity::Type::CustomEmoji:
-      case MessageEntity::Type::Url:
-      case MessageEntity::Type::EmailAddress:
-      case MessageEntity::Type::Mention:
-      case MessageEntity::Type::Hashtag:
-      case MessageEntity::Type::Cashtag:
-      case MessageEntity::Type::PhoneNumber:
-        return false;
-      default:
-        return true;
-    }
-  });
+  return remove_unallowed_quote_user_entities(text, true, true);
 }
 
-void ToDoItem::validate(const char *source) {
-  if (remove_unsupported_entities(title_)) {
+void ToDoItem::validate(int32 message_date, const char *source) {
+  if (remove_unsupported_entities(title_) && message_date > 1782000000) {  // approximate fix time
     LOG(ERROR) << "Receive unexpected checklist task entities from " << source;
   }
   if (!check_utf8(title_.text)) {

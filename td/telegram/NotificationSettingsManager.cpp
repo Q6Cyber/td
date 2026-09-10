@@ -1128,6 +1128,9 @@ void NotificationSettingsManager::upload_ringtone(FileUploadId file_upload_id, b
 
 void NotificationSettingsManager::on_upload_ringtone(FileUploadId file_upload_id,
                                                      telegram_api::object_ptr<telegram_api::InputFile> input_file) {
+  if (G()->close_flag()) {
+    return;
+  }
   LOG(INFO) << "Ringtone " << file_upload_id << " has been uploaded";
 
   auto it = being_uploaded_ringtones_.find(file_upload_id);
@@ -1184,6 +1187,9 @@ void NotificationSettingsManager::on_upload_ringtone(FileUploadId file_upload_id
 }
 
 void NotificationSettingsManager::on_upload_ringtone_error(FileUploadId file_upload_id, Status status) {
+  if (G()->close_flag()) {
+    return;
+  }
   LOG(INFO) << "Ringtone " << file_upload_id << " has upload error " << status;
   CHECK(status.is_error());
 
@@ -1312,9 +1318,9 @@ Result<FileId> NotificationSettingsManager::get_ringtone(
   }
   CHECK(document_id == telegram_api::document::ID);
 
-  auto parsed_document =
-      td_->documents_manager_->on_get_document(move_tl_object_as<telegram_api::document>(ringtone), DialogId(), false,
-                                               nullptr, Document::Type::Audio, DocumentsManager::Subtype::Ringtone);
+  auto parsed_document = td_->documents_manager_->on_get_document(
+      move_tl_object_as<telegram_api::document>(ringtone), DialogId(), false, false, nullptr, Document::Type::Audio,
+      DocumentsManager::Subtype::Ringtone);
   if (parsed_document.type != Document::Type::Audio) {
     return Status::Error("Receive ringtone of a wrong type");
   }

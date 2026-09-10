@@ -6,6 +6,7 @@
 //
 #pragma once
 
+#include "td/telegram/FormattedDate.hpp"
 #include "td/telegram/MessageEntity.h"
 
 #include "td/utils/tl_helpers.h"
@@ -30,6 +31,9 @@ void MessageEntity::store(StorerT &storer) const {
   if (type == Type::CustomEmoji) {
     store(custom_emoji_id, storer);
   }
+  if (type == Type::FormattedDate) {
+    store(date, storer);
+  }
 }
 
 template <class ParserT>
@@ -49,6 +53,9 @@ void MessageEntity::parse(ParserT &parser) {
   }
   if (type == Type::CustomEmoji) {
     parse(custom_emoji_id, parser);
+  }
+  if (type == Type::FormattedDate) {
+    parse(date, parser);
   }
 }
 
